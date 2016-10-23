@@ -1,28 +1,17 @@
 #!/bin/bash
 
-
 # Change this to your netid
 netid=khg140030
 
 #
 # Root directory of your project
-PROJDIR=$HOME/Workspace/advos_ass1
+PROJDIR=$HOME/Workspace/OS_proj2
 
 #
 # This assumes your config file is named "config.txt"
 # and is located in your project directory
 #
-CONFIG=$PROJDIR/config_files/config.txt
-
-#
-# Directory your java classes are in
-#
-BINDIR=$PROJDIR/server
-
-#
-# Your main project class
-#
-PROG=server
+CONFIG=$PROJDIR/config_files/config0.txt
 
 n=1
 

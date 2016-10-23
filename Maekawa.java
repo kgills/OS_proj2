@@ -218,18 +218,41 @@ public class Maekawa {
             System.out.println("*** Maekawa ***");
 
             // parse the input arguments
+            // n n_i d c iter hostname[0] port[0] ... q_size q[0] ...
 
-            int n = 1;
-            int n_i = 0;
+            int n = Integer.parseInt(args[0]);
+            int n_i = Integer.parseInt(args[1]);
+            int d = Integer.parseInt(args[2]);
+            int c = Integer.parseInt(args[3]);
+            int iter = Integer.parseInt(args[4]);
 
-            // All we need here are the nodes in our quorum
-            // Put the host names into an array or vector of strings
-            // Put the ports into an arrary or vector of ints
+            System.out.println("n: "+n);
+            System.out.println("n_i: "+n_i);
+            System.out.println("d: "+d);
+            System.out.println("c: "+c);
+            System.out.println("iter: "+iter);
 
-            // Use the values to test
-            int d = 100;
-            int c = 100;
-            int iter = 10;
+
+            String[] hostnames = new String[n];
+            String[] ports = new String[n];
+            System.out.println("Nodes:");
+            int i;
+            for(i = 0; i < n; i++) {
+                hostnames[i] = args[2*i + 5];
+                ports[i] = args[2*i + 5 + 1];
+
+                System.out.println(hostnames[i]+" "+ports[i]);
+            }
+
+            int q_size = Integer.parseInt(args[2*i+5]);
+            System.out.println("q_size: "+q_size);
+            System.out.println("q_members:");
+            int saved_i = 2*i+5+1;
+            int[] q_members = new int[q_size];
+            for(i = 0; i < q_size; i++) {
+                q_members[i] = Integer.parseInt(args[saved_i+i]);
+                System.out.println(q_members[i]);
+            }
 
             // Start the server and protocol threads
             Protocol prot = new Protocol(n, n_i);
