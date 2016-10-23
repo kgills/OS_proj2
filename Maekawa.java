@@ -22,7 +22,7 @@ class Application implements Runnable {
     }
 
     // Return an exponential random variable from mean lambda
-    public double nextExp(int lambda) {
+    private double nextExp(int lambda) {
         return (-lambda)*Math.log(1-Math.random())/Math.log(2);
     }
 
@@ -86,6 +86,8 @@ class Server implements Runnable{
         System.out.println("Server running "+threadId);
 
         // Listen for messages from other nodes, pass them to the Maekawa class
+
+        // Testing the message sending
         Message m = new Message();
         m.clock = 0;
         m.type = MessageType.REQUEST;
@@ -101,35 +103,36 @@ class Protocol implements Runnable{
 
     // Class variables
     private int clock;
-    private boolean occupied;
-
-    private int pendingRequest;
-    private Boolean[] granted;
+    private int grantCount;
 
     // Volatile flags set and cleared by the Protocol and Application
     private volatile int csRequest;
     private volatile int csGrant;
-    private volatile int csReleased;
     private volatile int appComplete;
 
     // Queue used for storing messages sent from the Server to the protocol
-    // Should probably use a priority queue to order the messages by their time stamp
     private volatile BlockingQueue<Message> rcvQueue;
 
     Protocol(int n, int n_i) {
+
+        // Initialize class variables
         rcvQueue = new LinkedBlockingQueue<Message>();
-        granted = new Boolean[n];
-    } 
+        clock = 0;
+        grantCount = 0;
+        csRequest = 0;
+        csGrant = 0;
+        appComplete = 0;
+
+    }
+
     // Class methods
     public void enterCS() {
         csRequest = 1;
         while(csGrant == 0) {}
-
     }
 
     public void leaveCS() {
         csGrant = 0;
-        csReleased = 1;
     }
     
     private void grantCS() {
@@ -156,9 +159,6 @@ class Protocol implements Runnable{
     public void run() {
         long threadId = Thread.currentThread().getId();
         System.out.println("Protocol running "+threadId);
-        csRequest = 0;
-        csGrant = 0;
-        appComplete = 0;
 
         while(appComplete == 0) {
 
@@ -192,11 +192,8 @@ class Protocol implements Runnable{
 
         }
 
-
-        // Still wondering best way to process messages/application requests
-        return;
-
 /*
+
         while(true) {
             // Perform steps for Maekawa's protocol, loop here until all
             // nodes have completed
@@ -210,6 +207,7 @@ class Protocol implements Runnable{
             }
         }
 */
+
     }
 }
 
