@@ -1,6 +1,6 @@
-all: maekawa.java
+all: Maekawa.java
 	javac -g $^
 
 clean:
-	rm -rf maekawa.class
+	rm -rf *.class
 	
