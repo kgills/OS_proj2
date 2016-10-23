@@ -2,6 +2,14 @@
 
 ## Description
 
+Server: 
+* Listens for messages, puts them in protocol queue
+Protocol: 
+* Processes request and grant messages received from other nodes
+* Stores counter for number of grant messages received from other nodes
+
+## Source shell
+
 
 public class application {
 	

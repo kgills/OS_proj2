@@ -61,7 +61,7 @@ class Application implements Runnable {
 
 /******************************************************************************/
 enum MessageType {
-    REQUEST, GRANT, COMPLETE
+    REQUEST, GRANT, COMPLETE, RELEASE
 }
 
 /******************************************************************************/
