@@ -1,6 +1,15 @@
 import static java.lang.Math.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.Arrays;
+import java.io.*;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.ByteBuffer; 
+
+import com.sun.nio.sctp.MessageInfo;
+import com.sun.nio.sctp.SctpChannel;
+import com.sun.nio.sctp.SctpServerChannel;
 
 
 /******************************************************************************/
@@ -65,10 +74,11 @@ enum MessageType {
 }
 
 /******************************************************************************/
-class Message {
+class Message implements java.io.Serializable{
 
     // Variables for the messages being passes
     int clock;
+    int origin;
     MessageType type;
 }
 
@@ -76,25 +86,65 @@ class Message {
 class Server implements Runnable{
 
     private Protocol p;
+    private int port;
 
-    Server(Protocol p) {
+    Server(Protocol p, int port) {
         this.p = p;
+        this.port = port;
     }
 
     public void run() {
         long threadId = Thread.currentThread().getId();
         System.out.println("Server running "+threadId);
 
-        // Listen for messages from other nodes, pass them to the Maekawa class
-
         // Testing the message sending
-        Message m = new Message();
-        m.clock = 0;
-        m.type = MessageType.REQUEST;
-        p.putQueue(m);
+        // Message m = new Message();
+        // m.clock = 0;
+        // m.type = MessageType.REQUEST;
+        // p.putQueue(m);
+
+        SctpServerChannel ssc = null;
+        try {
+            ssc = SctpServerChannel.open();
+            InetSocketAddress serverAddr = new InetSocketAddress(port);
+            ssc.bind(serverAddr);            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+
+        while(true) {
+
+            // SctpChannel sc = ssc.accept();
+
+            // MessageInfo messageInfo = null;
+            // sc.receive()
+
+            try {
+
+                SctpChannel sc = ssc.accept();
+
+                // Thread.sleep(4000);
+                // Listen for messages from other nodes, pass them to the Maekawa class
+                byte[] data = new byte[128];
+
+
+                // Convert ByteBuffer to message object
+                ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
+                ObjectInputStream ois = new ObjectInputStream(bytesIn);
+                Message m = (Message)ois.readObject();
+                ois.close();
+                p.putQueue(m);
+
+            } catch (InterruptedException e) {
+                // We've been interrupted: no more messages.
+                return;
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        }
     }
-
-
 }
 
 /******************************************************************************/
@@ -102,27 +152,56 @@ class Protocol implements Runnable{
     // Execute Maekawa's protocol
 
     // Class variables
+    private int n;
+    private int n_i;
+    private int quorumSize;
+    private int[] quorumMembers;
+    private String[] hosts;
+    private int[] ports;
+
+    // Variables for running the protocol
     private int clock;
     private int grantCount;
+    private int currentRequest;
+    private Boolean granted;
 
     // Volatile flags set and cleared by the Protocol and Application
     private volatile int csRequest;
     private volatile int csGrant;
     private volatile int appComplete;
+    private volatile Boolean everyNodeComplete;
 
     // Queue used for storing messages sent from the Server to the protocol
-    private volatile BlockingQueue<Message> rcvQueue;
+    private volatile BlockingQueue<Message> receiveQueue;
+    private BlockingQueue<Message> requestQueue;
+    private Boolean[] completeArray;
 
-    Protocol(int n, int n_i) {
+    Protocol(int n, int n_i, int quorumSize, int[] quorumMembers, String[] hosts, int[] ports) {
+
+        this.n = n;
+        this.n_i = n_i;
+        this.quorumSize = quorumSize;
+        this.quorumMembers = quorumMembers;
+        this.hosts = hosts;
+        this.ports = ports;
 
         // Initialize class variables
-        rcvQueue = new LinkedBlockingQueue<Message>();
         clock = 0;
         grantCount = 0;
+        currentRequest = 0;
+        granted = false;
+
         csRequest = 0;
         csGrant = 0;
         appComplete = 0;
+        everyNodeComplete = false;
 
+        receiveQueue = new LinkedBlockingQueue<Message>();  // Server produces messages, protocol consumes
+        requestQueue = new LinkedBlockingQueue<Message>();  // que the received messages
+        completeArray = new Boolean[n];
+        for(int i = 0; i < n; i++) {
+            completeArray[i] = false;
+        }
     }
 
     // Class methods
@@ -133,10 +212,7 @@ class Protocol implements Runnable{
 
     public void leaveCS() {
         csGrant = 0;
-    }
-    
-    private void grantCS() {
-        csGrant = 1;
+        granted = false;
     }
 
     public void appComplete() {
@@ -145,69 +221,113 @@ class Protocol implements Runnable{
 
     public void putQueue(Message m) {
         try {
-            rcvQueue.put(m);
+            receiveQueue.put(m);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    // Send message to destination node
-    private void sendMessage(Message m, int dest) {
+    private byte[] serializeObject(Message m) throws IOException{
+        ByteArrayOutputStream bytesOut = new ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(bytesOut);
+        oos.writeObject(m);
+        oos.flush();
+        byte[] bytes = bytesOut.toByteArray();
+        bytesOut.close();
+        oos.close();
+        return bytes;
+    }
 
+    // Send message to destination node
+    private void sendMessage(MessageType type, int dest) {
+        Message m = new Message();
+        m.type = type;
+        m.origin = n_i;
+
+        // Send message to dest
     }
 
     public void run() {
         long threadId = Thread.currentThread().getId();
         System.out.println("Protocol running "+threadId);
 
-        while(appComplete == 0) {
+        while(true) {
+            if((csRequest == 1) && (currentRequest == grantCount)) {
 
-            // Wait for the application to request the CS
-            while(csRequest == 0) {
-                if(appComplete == 1) {
-                    // sendMessage COMPLETE to all other quorum members
-                    break;
+                // Process the CS request from the application
+                if((quorumMembers[currentRequest] == n_i) && (!granted)) {
+                    granted = true;
+                    currentRequest++;
+                } else {
+                   // Send request to next node
+                    sendMessage(MessageType.REQUEST, quorumMembers[currentRequest++]); 
                 }
             }
 
+            // Process any received messages
+            while(receiveQueue.peek() != null) {
+                Message m = receiveQueue.remove();
+
+                switch(m.type) {
+                    case REQUEST:
+                        try {
+                            requestQueue.put(m);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    break;
+                    case GRANT:
+                        grantCount++;
+                    break;
+                    case COMPLETE:
+                        completeArray[m.origin] = true;
+                    break;
+                    case RELEASE:
+                        granted = false;
+                    break;
+                    default:
+                    System.out.println("Unknown message received by protocol");
+                    return;
+                }
+            }
+
+            // Process any request messages
+            if((!granted) && (requestQueue.peek() != null)) {
+                Message m = requestQueue.remove();
+                granted = true;
+                sendMessage(MessageType.GRANT, m.origin);
+            }
+
+            if(grantCount == quorumSize) {
+                // Grant the CS to the application
+                granted = true;
+                csGrant = 1;
+                csRequest = 0;
+                grantCount = 0;
+                currentRequest = 0;
+            }
+
             if(appComplete == 1) {
-                break;
-            }
-            System.out.println("Requesting CS "+threadId);
+                appComplete = 2;
 
-            // Perform steps for Maekawa's protocol
-
-            // Get latest message from the queue
-            if(rcvQueue.peek() != null) {
-                Message m = rcvQueue.remove();
-                System.out.println("Message type: "+m.type);
+                // Send complete message to all of the nodes
+                for(int i = 0; i < n; i++) {
+                    sendMessage(MessageType.COMPLETE, i);
+                }
             }
 
-
-            grantCS();
-
-            // Wait for application to release CS
-            while(csGrant == 1) {}
-            System.out.println("CS Freed "+threadId);
-
-        }
-
-/*
-
-        while(true) {
-            // Perform steps for Maekawa's protocol, loop here until all
-            // nodes have completed
-
-            if(csRequest == 1) {
-                // Process the CS request from the application
+            // Check to see if all of the nodes have completed
+            Boolean allComplete = true;
+            for(int i = 0; i < n; i++) {
+                if(completeArray[i] == false) {
+                    allComplete = false;
+                    break;
+                }
             }
-
-            if(csReleased == 0) {
-                // Process the release of the CS
+            if(allComplete) {
+                return;
             }
         }
-*/
-
     }
 }
 
@@ -215,71 +335,73 @@ class Protocol implements Runnable{
 public class Maekawa {
 
     public static void main(String[] args) {
-            System.out.println("*** Maekawa ***");
+        System.out.println("*** Maekawa ***");
 
-            // parse the input arguments
-            // n n_i d c iter hostname[0] port[0] ... q_size q[0] ...
+        // parse the input arguments
+        // n n_i d c iter hostname[0] port[0] ... quorumSize q[0] ...
 
-            int n = Integer.parseInt(args[0]);
-            int n_i = Integer.parseInt(args[1]);
-            int d = Integer.parseInt(args[2]);
-            int c = Integer.parseInt(args[3]);
-            int iter = Integer.parseInt(args[4]);
+        int n = Integer.parseInt(args[0]);
+        int n_i = Integer.parseInt(args[1]);
+        int d = Integer.parseInt(args[2]);
+        int c = Integer.parseInt(args[3]);
+        int iter = Integer.parseInt(args[4]);
 
-            System.out.println("n: "+n);
-            System.out.println("n_i: "+n_i);
-            System.out.println("d: "+d);
-            System.out.println("c: "+c);
-            System.out.println("iter: "+iter);
+        System.out.println("n: "+n);
+        System.out.println("n_i: "+n_i);
+        System.out.println("d: "+d);
+        System.out.println("c: "+c);
+        System.out.println("iter: "+iter);
 
 
-            String[] hostnames = new String[n];
-            String[] ports = new String[n];
-            System.out.println("Nodes:");
-            int i;
-            for(i = 0; i < n; i++) {
-                hostnames[i] = args[2*i + 5];
-                ports[i] = args[2*i + 5 + 1];
+        String[] hostnames = new String[n];
+        int[] ports = new int[n];
+        System.out.println("Nodes:");
+        int i;
+        for(i = 0; i < n; i++) {
+            hostnames[i] = args[2*i + 5];
+            ports[i] = Integer.parseInt(args[2*i + 5 + 1]);
 
-                System.out.println(hostnames[i]+" "+ports[i]);
-            }
+            System.out.println(hostnames[i]+" "+ports[i]);
+        }
 
-            int q_size = Integer.parseInt(args[2*i+5]);
-            System.out.println("q_size: "+q_size);
-            System.out.println("q_members:");
-            int saved_i = 2*i+5+1;
-            int[] q_members = new int[q_size];
-            for(i = 0; i < q_size; i++) {
-                q_members[i] = Integer.parseInt(args[saved_i+i]);
-                System.out.println(q_members[i]);
-            }
+        int quorumSize = Integer.parseInt(args[2*i+5]);
+        System.out.println("quorumSize: "+quorumSize);
+        System.out.println("quorumMembers:");
+        int saved_i = 2*i+5+1;
+        int[] quorumMembers = new int[quorumSize];
+        for(i = 0; i < quorumSize; i++) {
+            quorumMembers[i] = Integer.parseInt(args[saved_i+i]);
+            System.out.println(quorumMembers[i]);
+        }
 
-            // Start the server and protocol threads
-            Protocol prot = new Protocol(n, n_i);
-            Thread protocol_thread = new Thread(prot);
-            protocol_thread.start();
+        // Sort the quorum members array
+        Arrays.sort(quorumMembers);
 
-            Thread server_thread = new Thread(new Server(prot));
-            server_thread.start();
+        // Start the server and protocol threads
+        Protocol prot = new Protocol(n, n_i, quorumSize, quorumMembers, hostnames, ports);
+        Thread protocol_thread = new Thread(prot);
+        protocol_thread.start();
 
-            // Wait 5 secodns for the applications to start
-            try {
-                Thread.sleep(5000);
-            } catch(Exception e) {
-                e.printStackTrace();
-            }
+        Thread server_thread = new Thread(new Server(prot));
+        server_thread.start();
 
-            Thread app_thread = new Thread(new Application(d, c, iter, prot));
-            app_thread.start();
+        // Wait 5 secodns for the applications to start
+        try {
+            Thread.sleep(5000);
+        } catch(Exception e) {
+            e.printStackTrace();
+        }
 
-            // Wait for all of the threads to exit
-            try {
-                app_thread.join();
-                protocol_thread.join();
-                server_thread.join();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        Thread app_thread = new Thread(new Application(d, c, iter, prot));
+        app_thread.start();
 
+        // Wait for all of the threads to exit
+        try {
+            app_thread.join();
+            protocol_thread.join();
+            server_thread.interrupt();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }
