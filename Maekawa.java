@@ -6,6 +6,7 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer; 
+import java.nio.channels.ClosedChannelException;
 
 import com.sun.nio.sctp.MessageInfo;
 import com.sun.nio.sctp.SctpChannel;
@@ -18,16 +19,18 @@ class Application implements Runnable {
     private int d; // Delay between critical section
     private int c; // Delay inside of critical secion
     private int iter; // Number of iterations to make before exiting
+    private int n_i; 
     private Protocol p;
 
     public volatile int csGranted;
 
 
-    Application(int d, int c, int iter, Protocol p) {
+    Application(int d, int c, int iter, Protocol p, int n_i) {
         this.d = d;
         this.c = c;
         this.iter = iter;
         this.p = p;
+        this.n_i = n_i;
     }
 
     // Return an exponential random variable from mean lambda
@@ -54,12 +57,35 @@ class Application implements Runnable {
             p.enterCS();
 
             try {
+                System.out.println("In CS");
+                FileWriter writer = new FileWriter("Maekawa.txt", true);
+                writer.write("Enter CS "+n_i+"\n");
+                writer.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+
+            try {
                 Thread.sleep((long)nextExp(c));
             } catch(Exception e) {
                 e.printStackTrace();
             }
 
+
+            try {
+                System.out.println("Exiting CS");
+                FileWriter writer = new FileWriter("Maekawa.txt", true);
+                writer.write("Exit CS "+n_i+"\n");
+                writer.close();
+            } catch(Exception e) {
+                e.printStackTrace();
+            }
+
+
             p.leaveCS();
+
+
             iter--;
         }
 
@@ -87,23 +113,22 @@ class Server implements Runnable{
 
     private Protocol p;
     private int port;
+    SctpServerChannel ssc;
+    private volatile Boolean closeFlag;
 
     Server(Protocol p, int port) {
         this.p = p;
         this.port = port;
+        closeFlag = false;
+    }
+
+    public void closeServer() {
+        closeFlag = true;
     }
 
     public void run() {
-        long threadId = Thread.currentThread().getId();
-        System.out.println("Server running "+threadId);
+        System.out.println("Server running "+port);
 
-        // Testing the message sending
-        // Message m = new Message();
-        // m.clock = 0;
-        // m.type = MessageType.REQUEST;
-        // p.putQueue(m);
-
-        SctpServerChannel ssc = null;
         try {
             ssc = SctpServerChannel.open();
             InetSocketAddress serverAddr = new InetSocketAddress(port);
@@ -112,37 +137,58 @@ class Server implements Runnable{
             e.printStackTrace();
         }
 
+        // Listen for the super thread to close the server
+        Thread closeListener = new Thread() {
+            public void run(){
+                while(true) {
+                    if(closeFlag) {
+                        try {
+                            ssc.close();
+                            System.out.println("Closed ssc");
+                        } catch(Exception e) {
+                            e.printStackTrace();
+                        }
+                        return;
+                    }
+                }
+            }
+        };
+        closeListener.start();
 
         while(true) {
-
-            // SctpChannel sc = ssc.accept();
-
-            // MessageInfo messageInfo = null;
-            // sc.receive()
 
             try {
 
                 SctpChannel sc = ssc.accept();
 
-                // Thread.sleep(4000);
+                if(sc == null) {
+                    return;
+                }
+
                 // Listen for messages from other nodes, pass them to the Maekawa class
-                byte[] data = new byte[128];
+                byte[] data = new byte[512];
+                ByteBuffer buf = ByteBuffer.wrap(data);
 
+                sc.receive(buf, null, null);
 
+                // Something here is not working
                 // Convert ByteBuffer to message object
                 ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
                 ObjectInputStream ois = new ObjectInputStream(bytesIn);
                 Message m = (Message)ois.readObject();
                 ois.close();
+
+                sc.close();
+
+                System.out.println("Received type = "+m.type+" origin = "+m.origin);
                 p.putQueue(m);
-
-            } catch (InterruptedException e) {
-                // We've been interrupted: no more messages.
-                return;
-            } catch (IOException e) {
+            
+            } catch (ClassNotFoundException e) {
                 e.printStackTrace();
+            } catch (Exception e) {
+                System.out.println("Closing server");
+                return;
             }
-
         }
     }
 }
@@ -213,6 +259,12 @@ class Protocol implements Runnable{
     public void leaveCS() {
         csGrant = 0;
         granted = false;
+
+        for(int i = 0; i < quorumSize; i++) {
+            if(quorumMembers[i] != n_i) {
+                sendMessage(MessageType.RELEASE, quorumMembers[i]);
+            }
+        }
     }
 
     public void appComplete() {
@@ -244,7 +296,18 @@ class Protocol implements Runnable{
         m.type = type;
         m.origin = n_i;
 
-        // Send message to dest
+        try {
+            // Send message to dest
+            InetSocketAddress serverAddr = new InetSocketAddress(hosts[dest], ports[dest]);
+            SctpChannel sc = SctpChannel.open(serverAddr, 0, 0);
+
+            MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
+            sc.send(ByteBuffer.wrap(serializeObject(m)), messageInfo);
+
+            sc.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public void run() {
@@ -257,8 +320,10 @@ class Protocol implements Runnable{
                 // Process the CS request from the application
                 if((quorumMembers[currentRequest] == n_i) && (!granted)) {
                     granted = true;
+                    System.out.println("Granting to our own application");
                     currentRequest++;
-                } else {
+                    grantCount++;
+                } else if(quorumMembers[currentRequest] != n_i) {
                    // Send request to next node
                     sendMessage(MessageType.REQUEST, quorumMembers[currentRequest++]); 
                 }
@@ -270,6 +335,7 @@ class Protocol implements Runnable{
 
                 switch(m.type) {
                     case REQUEST:
+                        System.out.println("Queing REQUEST");
                         try {
                             requestQueue.put(m);
                         } catch (Exception e) {
@@ -293,6 +359,7 @@ class Protocol implements Runnable{
 
             // Process any request messages
             if((!granted) && (requestQueue.peek() != null)) {
+                System.out.println("Processing REQUEST");
                 Message m = requestQueue.remove();
                 granted = true;
                 sendMessage(MessageType.GRANT, m.origin);
@@ -312,8 +379,12 @@ class Protocol implements Runnable{
 
                 // Send complete message to all of the nodes
                 for(int i = 0; i < n; i++) {
-                    sendMessage(MessageType.COMPLETE, i);
+                    if(i != n_i) {
+                        sendMessage(MessageType.COMPLETE, i);                        
+                    }
                 }
+                completeArray[n_i]=true;
+
             }
 
             // Check to see if all of the nodes have completed
@@ -382,7 +453,8 @@ public class Maekawa {
         Thread protocol_thread = new Thread(prot);
         protocol_thread.start();
 
-        Thread server_thread = new Thread(new Server(prot));
+        Server server = new Server(prot, ports[n_i]);
+        Thread server_thread = new Thread(server);
         server_thread.start();
 
         // Wait 5 secodns for the applications to start
@@ -392,14 +464,15 @@ public class Maekawa {
             e.printStackTrace();
         }
 
-        Thread app_thread = new Thread(new Application(d, c, iter, prot));
+        Thread app_thread = new Thread(new Application(d, c, iter, prot, n_i));
         app_thread.start();
 
         // Wait for all of the threads to exit
         try {
             app_thread.join();
             protocol_thread.join();
-            server_thread.interrupt();
+            server.closeServer();
+            server_thread.join();
         } catch (Exception e) {
             e.printStackTrace();
         }

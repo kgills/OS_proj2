@@ -3,4 +3,5 @@ all: Maekawa.java
 
 clean:
 	rm -rf *.class
+	rm Maekawa.txt
 	
