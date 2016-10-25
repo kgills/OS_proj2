@@ -1,0 +1,11 @@
+5 20 10 1000
+0 dc30.utdallas.edu 1274
+1 dc40.utdallas.edu 1285
+2 dc21.utdallas.edu 1296
+3 dc06.utdallas.edu 1207
+4 dc32.utdallas.edu 1218
+0 0 1 2
+1 1 2 3
+2 2 3
+3 1 3
+4 1 2

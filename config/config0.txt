@@ -1,9 +1,9 @@
 5 20 10 1000
-0 dc10.utdallas.edu 1274
-1 dc15.utdallas.edu 1285
-2 dc13.utdallas.edu 1296
-3 dc19.utdallas.edu 1207
-4 dc30.utdallas.edu 1218
+0 localhost 1274
+1 localhost 1285
+2 localhost 1296
+3 localhost 1207
+4 localhost 1218
 0 0 1 2
 1 1 2 3
 2 2 3

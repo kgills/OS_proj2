@@ -38,6 +38,13 @@ class Application implements Runnable {
         return (-lambda)*Math.log(1-Math.random())/Math.log(2);
     }
 
+    private void delay(double usec) {
+        long start = System.nanoTime();
+        long stop = start + (long)usec*1000;
+
+        while(System.nanoTime() < stop) {}
+    }
+
     public void run() {
         long threadId = Thread.currentThread().getId();
 
@@ -48,16 +55,11 @@ class Application implements Runnable {
 
         while(iter > 0) {
 
-            try {
-                Thread.sleep((long)nextExp(d));
-            } catch(Exception e) {
-                e.printStackTrace();
-            }
+            delay(nextExp(d));
 
             p.enterCS();
 
             try {
-                System.out.println("In CS");
                 FileWriter writer = new FileWriter("Maekawa.txt", true);
                 writer.write("Enter CS "+n_i+"\n");
                 writer.close();
@@ -66,15 +68,9 @@ class Application implements Runnable {
             }
 
 
-            try {
-                Thread.sleep((long)nextExp(c));
-            } catch(Exception e) {
-                e.printStackTrace();
-            }
-
+            delay(nextExp(c));
 
             try {
-                System.out.println("Exiting CS");
                 FileWriter writer = new FileWriter("Maekawa.txt", true);
                 writer.write("Exit CS "+n_i+"\n");
                 writer.close();
@@ -180,7 +176,6 @@ class Server implements Runnable{
 
                 sc.close();
 
-                System.out.println("Received type = "+m.type+" origin = "+m.origin);
                 p.putQueue(m);
             
             } catch (ClassNotFoundException e) {
@@ -320,7 +315,6 @@ class Protocol implements Runnable{
                 // Process the CS request from the application
                 if((quorumMembers[currentRequest] == n_i) && (!granted)) {
                     granted = true;
-                    System.out.println("Granting to our own application");
                     currentRequest++;
                     grantCount++;
                 } else if(quorumMembers[currentRequest] != n_i) {
@@ -335,7 +329,6 @@ class Protocol implements Runnable{
 
                 switch(m.type) {
                     case REQUEST:
-                        System.out.println("Queing REQUEST");
                         try {
                             requestQueue.put(m);
                         } catch (Exception e) {
@@ -359,7 +352,6 @@ class Protocol implements Runnable{
 
             // Process any request messages
             if((!granted) && (requestQueue.peek() != null)) {
-                System.out.println("Processing REQUEST");
                 Message m = requestQueue.remove();
                 granted = true;
                 sendMessage(MessageType.GRANT, m.origin);

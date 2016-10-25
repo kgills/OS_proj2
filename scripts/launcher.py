@@ -6,10 +6,10 @@ print 'Opening config file:', str(sys.argv[1])
 config_file = open(sys.argv[1], 'r')
 
 # Edit this to the path where the executables are
-path="~/Workspace/AdvancedOS/OS_proj2/"
+path="/home/kgills/Workspace/AdvancedOS/OS_proj2/"
 
 # Edit this for your username
-user="khg140030@"
+user="khg140030"
 
 n = -1
 d = -1
@@ -81,7 +81,7 @@ for quorum in quorums:
 i = 0
 for machine in machines:
 
-	command = [path+"java Maekawa",str(n),machines[i][0], str(d), str(c), str(iters)]
+	command = ["java","-cp",path,"Maekawa",str(n),machines[i][0], str(d), str(c), str(iters)]
 
 	for machine2 in machines:
 		command = command + machine2[1:]
@@ -89,9 +89,17 @@ for machine in machines:
 	command = command +[str(len(quorums[i]) - 1)]+quorums[i][1:]
 
 	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1]]+command
-	print " ".join(command)
+	# command = " ".join(command)
 	i = i+1
 
-	# p=subprocess.Popen(command)
+	# print command
+	p=subprocess.Popen(command)
 
-# p.wait()
+p.wait()
+
+for machine in machines:
+	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1],"killall","-u",user,"&"]
+	print " ".join(command)
+	p = subprocess.Popen(command)
+
+p.wait()
