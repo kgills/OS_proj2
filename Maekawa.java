@@ -1,6 +1,5 @@
 import static java.lang.Math.*;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Arrays;
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -161,25 +160,36 @@ class Server implements Runnable{
                     return;
                 }
 
-                // Listen for messages from other nodes, pass them to the Maekawa class
-                byte[] data = new byte[512];
-                ByteBuffer buf = ByteBuffer.wrap(data);
+                Thread clientThread = new Thread() {
+                    public void run() {
+                        try {
+                            // Listen for messages from other nodes, pass them to the Maekawa class
+                            byte[] data = new byte[512];
+                            ByteBuffer buf = ByteBuffer.wrap(data);
 
-                sc.receive(buf, null, null);
+                            sc.receive(buf, null, null);
 
-                // Something here is not working
-                // Convert ByteBuffer to message object
-                ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
-                ObjectInputStream ois = new ObjectInputStream(bytesIn);
-                Message m = (Message)ois.readObject();
-                ois.close();
+                            ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
+                            ObjectInputStream ois = new ObjectInputStream(bytesIn);
+                            Message m = (Message)ois.readObject();
+                            ois.close();
 
-                sc.close();
+                            // Echo back data to ensure FIFO
+                            MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
+                            sc.send(buf, messageInfo);
 
-                p.putQueue(m);
+                            sc.close();
+
+                            p.putQueue(m);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+
+                };
+                clientThread.start();
+
             
-            } catch (ClassNotFoundException e) {
-                e.printStackTrace();
             } catch (Exception e) {
                 System.out.println("Closing server");
                 return;
@@ -213,8 +223,8 @@ class Protocol implements Runnable{
     private volatile Boolean everyNodeComplete;
 
     // Queue used for storing messages sent from the Server to the protocol
-    private volatile BlockingQueue<Message> receiveQueue;
-    private BlockingQueue<Message> requestQueue;
+    private volatile ConcurrentLinkedQueue<Message> receiveQueue;
+    private ConcurrentLinkedQueue<Message> requestQueue;
     private Boolean[] completeArray;
 
     Protocol(int n, int n_i, int quorumSize, int[] quorumMembers, String[] hosts, int[] ports) {
@@ -237,8 +247,8 @@ class Protocol implements Runnable{
         appComplete = 0;
         everyNodeComplete = false;
 
-        receiveQueue = new LinkedBlockingQueue<Message>();  // Server produces messages, protocol consumes
-        requestQueue = new LinkedBlockingQueue<Message>();  // que the received messages
+        receiveQueue = new ConcurrentLinkedQueue<Message>();  // Server produces messages, protocol consumes
+        requestQueue = new ConcurrentLinkedQueue<Message>();  // que the received messages
         completeArray = new Boolean[n];
         for(int i = 0; i < n; i++) {
             completeArray[i] = false;
@@ -268,7 +278,7 @@ class Protocol implements Runnable{
 
     public void putQueue(Message m) {
         try {
-            receiveQueue.put(m);
+            receiveQueue.add(m);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -298,6 +308,12 @@ class Protocol implements Runnable{
 
             MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
             sc.send(ByteBuffer.wrap(serializeObject(m)), messageInfo);
+
+            // Wait for echo from server
+            byte[] data = new byte[512];
+            ByteBuffer buf = ByteBuffer.wrap(data);
+
+            sc.receive(buf, null, null);
 
             sc.close();
         } catch (IOException e) {
@@ -330,7 +346,7 @@ class Protocol implements Runnable{
                 switch(m.type) {
                     case REQUEST:
                         try {
-                            requestQueue.put(m);
+                            requestQueue.add(m);
                         } catch (Exception e) {
                             e.printStackTrace();
                         }

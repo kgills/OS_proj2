@@ -101,5 +101,4 @@ for machine in machines:
 	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1],"killall","-u",user,"&"]
 	print " ".join(command)
 	p = subprocess.Popen(command)
-
-p.wait()
+	p.wait()
