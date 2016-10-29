@@ -1,11 +1,14 @@
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.sun.nio.sctp.MessageInfo;
@@ -21,7 +24,7 @@ class Application implements Runnable {
 	private int iter; // Number of iterations to make before exiting
 	private Protocol p;
 
-	public volatile int csGranted;
+	//public volatile int csGranted;
 
 
 	Application(int d, int c, int iter, Protocol p) {
@@ -37,47 +40,52 @@ class Application implements Runnable {
 	}
 
 	public void run() {
-		long threadId = Thread.currentThread().getId();
+		//long threadId = Thread.currentThread().getId();
 
-		System.out.println("Application running "+threadId);
+		/*System.out.println("Application running "+threadId);
 		System.out.println("d = "+d);
 		System.out.println("c = "+c);
-		System.out.println("iter = "+iter);
+		System.out.println("iter = "+iter);*/
 
 		while(iter > 0) {
 
+			System.out.println("ID:"+p.getID()+" Iteration:"+iter);
 			try {
 				Thread.sleep((long)nextExp(d));
 			} catch(Exception e) {
 				e.printStackTrace();
 			}
 
+			System.out.println("ID:"+p.getID()+"Before Entering");
 			p.enterCS();
-			
+
 			try {
-                FileWriter writer = new FileWriter("Maekawa.txt", true);
-                writer.write("Enter CS "+p.getID()+"\n");
-                writer.close();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+				FileWriter writer = new FileWriter("Maekawa.txt", true);
+				System.out.println("ID:"+p.getID()+"Entering entry");
+				writer.write("Enter CS "+p.getID()+"\n");
+				writer.close();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 
-
+			System.out.println("ID:"+p.getID()+"Waiting in critical section");
 			try {
 				Thread.sleep((long)nextExp(c));
 			} catch(Exception e) {
 				e.printStackTrace();
 			}
-			
+
 			try {
-                FileWriter writer = new FileWriter("Maekawa.txt", true);
-                writer.write("Exit CS "+p.getID()+"\n");
-                writer.close();
-            } catch(Exception e) {
-                e.printStackTrace();
-            }
+				FileWriter writer = new FileWriter("Maekawa.txt", true);
+				System.out.println("ID:"+p.getID()+"Leaving entry");
+				writer.write("Exit CS "+p.getID()+"\n");
+				writer.close();
+			} catch(Exception e) {
+				e.printStackTrace();
+			}
 
 			p.leaveCS();
+			System.out.println("ID:"+p.getID()+"After Leaving");
 			iter--;
 		}
 
@@ -92,7 +100,7 @@ enum MessageType {
 }
 
 /******************************************************************************/
-class Message {
+class Message implements Serializable {
 
 	// Variables for the messages being passes
 	int sender;
@@ -116,15 +124,15 @@ class Server implements Runnable{
 	}
 
 	public void run() {
-		long threadId = Thread.currentThread().getId();
-		System.out.println("Server running "+threadId);
+		//long threadId = Thread.currentThread().getId();
+		//System.out.println("Server running "+threadId);
 
 		// Listen for messages from other nodes, pass them to the Maekawa class
 		try {
-			SocketAddress serverSocketAddress = new InetSocketAddress(9876);         
+			SocketAddress serverSocketAddress = new InetSocketAddress(Integer.parseInt(p.getPort()));         
 			SctpServerChannel sctpServerChannel = SctpServerChannel.open().bind(serverSocketAddress); 
 			SctpChannel sctpChannel;
-			
+
 			while ((sctpChannel = sctpServerChannel.accept()) != null) { 
 				ServerThread t= new ServerThread(sctpChannel, p);
 				new Thread(t).start();
@@ -169,11 +177,21 @@ class ServerThread implements Runnable {
 				p.setClock(m.clock+1);
 			else
 				p.setClock(p.getClock()+1);
-			
-			if(m.type == MessageType.GRANT)
+
+			if(m.type == MessageType.GRANT) {
+				System.out.println("Received-"+"Origin:"+m.sender+" received at:"+p.getID()+" type"+m.type);
+				/*if(p.getID()==2)
+					System.out.println("Iter"+p.getIter()+"-------------------------------------------------");*/
 				p.incrementGrantCount();
-			else
+			}
+			else if(m.type == MessageType.RELEASE) {
+				System.out.println("Received-"+"Origin:"+m.sender+" received at:"+p.getID()+" type"+m.type);
+				p.setKeyGranted(0);
+			}
+			else {
+				System.out.println("Received-"+"Origin:"+m.sender+" received at:"+p.getID()+" type"+m.type);
 				p.putQueue(m);
+			}
 		} catch(Exception e) {
 			e.printStackTrace();
 		}
@@ -187,16 +205,21 @@ class Protocol implements Runnable{
 
 	// Class variables
 	//TODO Added ID, HashMap
+	private int n;
 	private int ID;
 	private int clock;
 	private int grantCount;
 	private int iter;
+	private int keyGranted;
+	private int totalCompleted;
+	private boolean ownRequestReceived;
 	private int[] quorumMembers;
 	private String[] hostnames;
 	private String[] ports;
 	private boolean[] completeArray;
+
 	//hostnames[quoruMembers[0]];
-	
+
 	//private HashMap<Integer, >
 
 	// Volatile flags set and cleared by the Protocol and Application
@@ -212,6 +235,7 @@ class Protocol implements Runnable{
 	Protocol(int n, int n_i, String[] hostnames, String[] ports, int[] quorumMembers) {
 
 		// Initialize class variables
+		this.n = n;
 		ID = n_i;
 		rcvQueue = new ConcurrentLinkedQueue<Message>();
 		clock = 0;
@@ -220,8 +244,12 @@ class Protocol implements Runnable{
 		csRequest = 0;
 		csGrant = 0;
 		appComplete = 0;
+		keyGranted = 0;
+		ownRequestReceived=false;
+		totalCompleted = 0;
 		//TODO Change the length of these arrays
 		this.quorumMembers= quorumMembers;
+		Arrays.sort(quorumMembers);
 		this.hostnames = hostnames;
 		this.ports = ports;
 		completeArray = new boolean[hostnames.length];
@@ -229,22 +257,40 @@ class Protocol implements Runnable{
 	}
 
 	// Class methods
-	
+
 	public int getID(){
 		return ID;
+	}
+
+	public String getPort() {
+		return ports[ID];
+	}
+
+	public void setKeyGranted(int i) {
+		keyGranted = 0;
+	}
+
+	public int getIter() {
+		return iter;
 	}
 	
 	public void enterCS() {
 		setGrantCount();
 		iter = -1;
 		csRequest = 1;
+		Message m = new Message(ID, clock, MessageType.REQUEST);
+		/*if(ID==2 || ID==1)
+			System.out.println("Request added to queue for ID:"+ID+"***************************************************");*/
+		rcvQueue.add(m);
+		//System.out.println("PID:"+Thread.currentThread().getId()+"csRequest "+csRequest);
+		//System.out.println("ID:"+ID+"csGrant"+csGrant);
 		while(csGrant == 0) {}
 	}
 
 	public void leaveCS() {
 		csRequest = 0;
 		csGrant = 0;
-		
+
 		clock++;
 		Message release = new Message(ID, clock, MessageType.RELEASE);
 		for(int i=0;i<quorumMembers.length;i++) {
@@ -257,8 +303,8 @@ class Protocol implements Runnable{
 	}
 
 	public void appComplete() {
-		appComplete = 1;
-		
+		//appComplete = 1;
+		//totalCompleted++;
 		completeArray[ID] = true;
 		clock++;
 		Message complete = new Message(ID, clock, MessageType.COMPLETE);
@@ -282,18 +328,19 @@ class Protocol implements Runnable{
 	public void incrementGrantCount() {
 		grantCount++;
 	}
-	
+
 	public int getClock() {
 		return clock;
 	}
-	
+
 	public void setClock(int i) {
 		clock = i;
 	}
 	// Send message to destination node
 	private void sendMessage(Message m, int dest) {
-		
+
 		try {
+			System.out.println("Sending:"+"Origin:"+ ID+ " Destination:"+dest+" type:"+m.type);
 			SocketAddress socketAddress = new InetSocketAddress( hostnames[dest], Integer.parseInt(ports[dest])); 
 			SctpChannel sctpChannel = SctpChannel.open(socketAddress, 0, 0); 
 
@@ -321,40 +368,60 @@ class Protocol implements Runnable{
 	}
 
 	public void run() {
-		long threadId = Thread.currentThread().getId();
-		System.out.println("Protocol running "+threadId);
 
-		while(appComplete == 0) {
+		while(totalCompleted < n) {
 
-			if(csRequest == 1 && csGrant==0) {
-				if(iter < grantCount && grantCount <= quorumMembers.length) {
-					iter++;
-					clock++;
-					Message request= new Message(ID, clock, MessageType.REQUEST);
-					sendMessage(request, quorumMembers[iter]);
-				}
-
-			}
-			//Process received messages from Server
 			Message m = rcvQueue.peek();
-			if(m!=null && m.type == MessageType.REQUEST) {
-				if(csGrant==0 && csRequest==0) {
-					grantCS();
+			if((m!=null && m.type == MessageType.REQUEST) || (ownRequestReceived && iter < grantCount)) {
+				
+				if((m!=null && m.sender == ID) || (ownRequestReceived && iter < grantCount)) {
+					
+					/*if(m!=null && m.sender == ID &&ID==2)
+						System.out.println("Processing own REQUEST from ID:"+ID+"***************************************************");*/
+					if(!ownRequestReceived) {
+						rcvQueue.poll();
+						ownRequestReceived = true;
+					}
+					
+					if(iter < grantCount && grantCount < quorumMembers.length) {
+						//iter++;
+						clock++;
+						/*if(ID==2) {
+							System.out.println("iter < grandCount and so inside this loop+++++++++++++++++++++++++++++++++++++++++++++");
+							System.out.println("quorumMember:"+quorumMembers[iter+1]+" iter:"+(iter++)+" keyGranted"+keyGranted);
+						}*/
+						if(quorumMembers[iter+1]==ID && keyGranted==0) {
+							iter++;
+							keyGranted = 1;
+							/*if(ID==2)
+								System.out.println("Sending GRANT to own request from ID:"+ID+"--------------------------------------------");*/
+							Message grant= new Message(ID, clock, MessageType.GRANT);
+							sendMessage(grant, quorumMembers[iter]);
+						}
+						else if(quorumMembers[iter+1]!=ID) {
+							iter++;
+							Message request= new Message(ID, clock, MessageType.REQUEST);
+							sendMessage(request, quorumMembers[iter]);
+						}
+					}
+				}
+				else if(keyGranted==0) {
+					keyGranted = 1;
 					rcvQueue.poll();
 					clock++;
 					Message grant= new Message(ID, clock, MessageType.GRANT);
 					sendMessage(grant, m.sender);
-					//TODO Take a look at the data structures and change localhost
 				}
 			}
-			else if(m!=null && m.type == MessageType.RELEASE) {
-				csGrant=0;
-			}
 			else if(m!=null && m.type == MessageType.COMPLETE) {
+				totalCompleted++;
+				rcvQueue.poll();
 				completeArray[m.sender]=true;
 			}
-			
+
 			if(grantCount == quorumMembers.length) {
+				setGrantCount();
+				ownRequestReceived = false;
 				grantCS();
 			}
 		}
@@ -364,7 +431,7 @@ class Protocol implements Runnable{
 /******************************************************************************/
 public class Maekawa {
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws IOException {
 		System.out.println("*** Maekawa ***");
 
 		// parse the input arguments
@@ -381,7 +448,6 @@ public class Maekawa {
 		System.out.println("d: "+d);
 		System.out.println("c: "+c);
 		System.out.println("iter: "+iter);
-
 
 		String[] hostnames = new String[n];
 		String[] ports = new String[n];
@@ -405,7 +471,15 @@ public class Maekawa {
 		}
 
 		// Start the server and protocol threads
+		//TODO remove loop when done
+		for(int x=0;x<ports.length;x++)
+			ports[x]= Integer.toString(Integer.parseInt(ports[x])+66); 
 		Protocol prot = new Protocol(n, n_i, hostnames, ports, q_members);
+		
+		FileWriter writer = new FileWriter("Maekawa.txt", false);
+		writer.write("");
+		writer.close();
+		
 		Thread protocol_thread = new Thread(prot);
 		protocol_thread.start();
 
