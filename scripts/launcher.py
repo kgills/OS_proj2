@@ -88,7 +88,7 @@ for machine in machines:
 
 	command = command +[str(len(quorums[i]) - 1)]+quorums[i][1:]
 
-	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1]]+command
+	# ommand = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1]]+command
 	# command = " ".join(command)
 	i = i+1
 
@@ -97,8 +97,8 @@ for machine in machines:
 
 p.wait()
 
-for machine in machines:
-	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1],"killall","-u",user,"&"]
-	print " ".join(command)
-	p = subprocess.Popen(command)
-	p.wait()
+# for machine in machines:
+# 	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1],"killall","-u",user,"&"]
+# 	print " ".join(command)
+# 	p = subprocess.Popen(command)
+# 	p.wait()

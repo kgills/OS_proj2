@@ -1,5 +1,7 @@
 import static java.lang.Math.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Comparator;
+import java.util.Queue;
+import java.util.PriorityQueue;
 import java.util.Arrays;
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -91,7 +93,7 @@ class Application implements Runnable {
 
 /******************************************************************************/
 enum MessageType {
-    REQUEST, GRANT, COMPLETE, RELEASE
+    REQUEST, GRANT, COMPLETE, RELEASE, INQUIRE, FAILED, YIELD
 }
 
 /******************************************************************************/
@@ -212,9 +214,9 @@ class Protocol implements Runnable{
 
     // Variables for running the protocol
     private int clock;
-    private int grantCount;
-    private int currentRequest;
     private Boolean granted;
+    private Boolean inquired;
+    private Message grantedMessage;
 
     // Volatile flags set and cleared by the Protocol and Application
     private volatile int csRequest;
@@ -223,9 +225,29 @@ class Protocol implements Runnable{
     private volatile Boolean everyNodeComplete;
 
     // Queue used for storing messages sent from the Server to the protocol
-    private volatile ConcurrentLinkedQueue<Message> receiveQueue;
-    private ConcurrentLinkedQueue<Message> requestQueue;
+    private volatile Queue<Message> receiveQueue;
+    private Queue<Message> requestQueue;
     private Boolean[] completeArray;
+    private Boolean[] grantArray;
+    private Boolean[] failArray;
+
+    public static Comparator<Message> messageComparator = new Comparator<Message>() {
+        @Override
+        public int compare(Message m1, Message m2) {
+            if(m1.clock < m1.clock) {
+                return 1;
+            } else if (m1.clock > m1.clock) {
+                return -1;
+            }
+
+            if(m1.origin < m2.origin) {
+                return 1;
+            }
+
+            return -1;
+        }
+    };
+
 
     Protocol(int n, int n_i, int quorumSize, int[] quorumMembers, String[] hosts, int[] ports) {
 
@@ -238,26 +260,35 @@ class Protocol implements Runnable{
 
         // Initialize class variables
         clock = 0;
-        grantCount = 0;
-        currentRequest = 0;
         granted = false;
+        inquired = false;
+        grantedMessage.clock = 0;
+        grantedMessage.origin = 0;
 
         csRequest = 0;
         csGrant = 0;
         appComplete = 0;
         everyNodeComplete = false;
 
-        receiveQueue = new ConcurrentLinkedQueue<Message>();  // Server produces messages, protocol consumes
-        requestQueue = new ConcurrentLinkedQueue<Message>();  // que the received messages
+        receiveQueue = new PriorityQueue<Message>(n, messageComparator);  // Server produces messages, protocol consumes
+        requestQueue = new PriorityQueue<Message>(n, messageComparator);  // que the received messages
         completeArray = new Boolean[n];
         for(int i = 0; i < n; i++) {
             completeArray[i] = false;
+        }
+        grantArray = new Boolean[quorumSize];
+        for(int i = 0; i < quorumSize; i++) {
+            grantArray[i] = false;
+        }
+        failArray = new Boolean[quorumSize];
+        for(int i = 0; i < quorumSize; i++) {
+            failArray[i] = false;
         }
     }
 
     // Class methods
     public void enterCS() {
-        csRequest = 1;
+        broadcastMessage(MessageType.REQUEST);
         while(csGrant == 0) {}
     }
 
@@ -267,6 +298,7 @@ class Protocol implements Runnable{
 
         for(int i = 0; i < quorumSize; i++) {
             if(quorumMembers[i] != n_i) {
+                grantArray[i] = false;
                 sendMessage(MessageType.RELEASE, quorumMembers[i]);
             }
         }
@@ -300,6 +332,8 @@ class Protocol implements Runnable{
         Message m = new Message();
         m.type = type;
         m.origin = n_i;
+        m.clock = clock;
+        clock++;
 
         try {
             // Send message to dest
@@ -321,44 +355,94 @@ class Protocol implements Runnable{
         }
     }
 
+    private void broadcastMessage(MessageType type) {
+        for(int i = 0; i < quorumSize; i++) {
+            sendMessage(type, quorumMembers[i]);
+        }
+    }
+
     public void run() {
         long threadId = Thread.currentThread().getId();
         System.out.println("Protocol running "+threadId);
 
         while(true) {
-            if((csRequest == 1) && (currentRequest == grantCount)) {
-
-                // Process the CS request from the application
-                if((quorumMembers[currentRequest] == n_i) && (!granted)) {
-                    granted = true;
-                    currentRequest++;
-                    grantCount++;
-                } else if(quorumMembers[currentRequest] != n_i) {
-                   // Send request to next node
-                    sendMessage(MessageType.REQUEST, quorumMembers[currentRequest++]); 
-                }
-            }
 
             // Process any received messages
             while(receiveQueue.peek() != null) {
                 Message m = receiveQueue.remove();
 
+                // Convert m.origin to the index into our quorum members
+                int m_q = 0;
+                for(int i = 0; i < quorumSize; i++) {
+                    if(m.origin == quorumMembers[i]) {
+                        m_q = i;
+                    }
+                }
+
+                clock++;
+                if(m.clock > clock) {
+                    clock = m.clock;
+                }
+
                 switch(m.type) {
                     case REQUEST:
                         try {
                             requestQueue.add(m);
+
+                            // Message comparator
+                            if(granted && (messageComparator.compare(grantedMessage, m) == 1)) {
+                                sendMessage(MessageType.FAILED, m.origin);
+                            }
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
                     break;
                     case GRANT:
-                        grantCount++;
+                        grantArray[m_q] = true;
+                        failArray[m_q] = false;
+                    break;
+                    case FAILED:
+                        failArray[m_q] = true;
                     break;
                     case COMPLETE:
                         completeArray[m.origin] = true;
                     break;
                     case RELEASE:
                         granted = false;
+                        // Remove request from our requestQueue
+                        // TODO: Remoe request with the smallest timestamp
+                        Message[] requests = new Message[requestQueue.size()];
+                        requestQueue.toArray(requests);
+                        for(int i = 0; i < requests.length; i++) {
+                            if(requests[i].origin == m.origin) {
+                                requestQueue.remove(requests[i]);
+                            }
+                        }
+
+                    break;
+                    case INQUIRE:
+                        // Yield lock if received a failed message
+                        // TODO: Need some more logic here
+                        for(int i = 0; i < quorumSize; i++) {
+                            if(failArray[i] == true) {
+                                grantArray[m_q] = false;
+                                sendMessage(MessageType.YIELD, m.origin);
+                            }
+                        }
+                    break;
+                    case YIELD:
+                        inquired = false;
+
+                        // Need to grant to request we inquired about
+                        if((requestQueue.peek() != null)) {
+                            // Grant the request
+                            Message mes = requestQueue.remove();
+                            granted = true;
+                            grantedMessage.clock = mes.clock;
+                            grantedMessage.origin = mes.origin;
+                            sendMessage(MessageType.GRANT, m.origin);
+                        }
+
                     break;
                     default:
                     System.out.println("Unknown message received by protocol");
@@ -367,21 +451,38 @@ class Protocol implements Runnable{
             }
 
             // Process any request messages
-            if((!granted) && (requestQueue.peek() != null)) {
-                Message m = requestQueue.remove();
-                granted = true;
-                sendMessage(MessageType.GRANT, m.origin);
+            if((requestQueue.peek() != null)) {
+
+                if(granted && !inquired && messageComparator.compare(requestQueue.peek(),grantedMessage)) {
+                    // Need to inquire our grant
+                    inquired = true;
+                    sendMessage(MessageType.INQUIRE, grantedMessage.origin);
+
+                } else if(!granted) {
+                    // Grant the request
+                    Message m = requestQueue.remove();
+                    granted = true;
+                    grantedMessage.clock = m.clock;
+                    grantedMessage.origin = m.origin;
+                    sendMessage(MessageType.GRANT, m.origin);
+                }
             }
 
-            if(grantCount == quorumSize) {
-                // Grant the CS to the application
+            // Check to see if we've received all the grant messags
+            Boolean allGranted = true;
+            for(int i; i < quorumSize; i++) {
+                if(grantArray[i] == false) {
+                    allGranted = false;
+                    break;
+                }
+            }
+            if(allGranted && !granted) {
                 granted = true;
                 csGrant = 1;
                 csRequest = 0;
-                grantCount = 0;
-                currentRequest = 0;
             }
 
+            // Check for app completion
             if(appComplete == 1) {
                 appComplete = 2;
 
