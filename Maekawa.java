@@ -111,6 +111,7 @@ class Server implements Runnable{
     private Protocol p;
     private int port;
     SctpServerChannel ssc;
+    SctpChannel sc;
     private volatile Boolean closeFlag;
 
     Server(Protocol p, int port) {
@@ -156,7 +157,7 @@ class Server implements Runnable{
 
             try {
 
-                SctpChannel sc = ssc.accept();
+                sc = ssc.accept();
 
                 if(sc == null) {
                     return;
@@ -234,14 +235,17 @@ class Protocol implements Runnable{
     public static Comparator<Message> messageComparator = new Comparator<Message>() {
         @Override
         public int compare(Message m1, Message m2) {
-            if(m1.clock < m1.clock) {
+            if(m1.clock < m2.clock) {
                 return 1;
-            } else if (m1.clock > m1.clock) {
+            } 
+            if (m1.clock > m2.clock) {
                 return -1;
             }
-
             if(m1.origin < m2.origin) {
                 return 1;
+            } 
+            if(m1.origin == m2.origin) {
+                return 0;
             }
 
             return -1;
@@ -453,7 +457,7 @@ class Protocol implements Runnable{
             // Process any request messages
             if((requestQueue.peek() != null)) {
 
-                if(granted && !inquired && messageComparator.compare(requestQueue.peek(),grantedMessage)) {
+                if(granted && !inquired && (messageComparator.compare(requestQueue.peek(),grantedMessage) == 1)) {
                     // Need to inquire our grant
                     inquired = true;
                     sendMessage(MessageType.INQUIRE, grantedMessage.origin);
@@ -470,7 +474,7 @@ class Protocol implements Runnable{
 
             // Check to see if we've received all the grant messags
             Boolean allGranted = true;
-            for(int i; i < quorumSize; i++) {
+            for(int i = 0; i < quorumSize; i++) {
                 if(grantArray[i] == false) {
                     allGranted = false;
                     break;
