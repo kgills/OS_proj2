@@ -43,7 +43,7 @@ class Application implements Runnable {
 
     private void delay(double usec) {
         long start = System.nanoTime();
-        long stop = start + (long)usec*1000;
+        long stop = start + (long)usec*10;
 
         while(System.nanoTime() < stop) {}
     }
@@ -124,7 +124,7 @@ class ServerHandler implements Runnable{
     public void run() {
         try {
             // Listen for messages from other nodes, pass them to the Maekawa class
-            byte[] data = new byte[512];
+            byte[] data = new byte[256];
             ByteBuffer buf = ByteBuffer.wrap(data);
 
             sc.receive(buf, null, null);
@@ -225,6 +225,7 @@ class Protocol implements Runnable{
     // Class variables
     private int n;
     private int n_i;
+    private int q_i;
     private int quorumSize;
     private int[] quorumMembers;
     private String[] hosts;
@@ -232,7 +233,6 @@ class Protocol implements Runnable{
 
     // Variables for running the protocol
     private int clock;
-    private Boolean granted;
     private Boolean inquired;
     private Message grantedMessage;
 
@@ -281,7 +281,6 @@ class Protocol implements Runnable{
 
         // Initialize class variables
         clock = 0;
-        granted = false;
         inquired = false;
         grantedMessage = new Message();
         grantedMessage.clock = 0;
@@ -306,6 +305,12 @@ class Protocol implements Runnable{
         for(int i = 0; i < quorumSize; i++) {
             failArray[i] = false;
         }
+
+        for(int i = 0; i < quorumSize; i++) {
+            if(q_i == quorumMembers[i]) {
+                q_i = i;
+            }
+        }
     }
 
     // Class methods
@@ -316,7 +321,6 @@ class Protocol implements Runnable{
 
     public void leaveCS() {
         csGrant = 0;
-        granted = false;
 
         for(int i = 0; i < quorumSize; i++) {
             if(quorumMembers[i] != n_i) {
@@ -368,7 +372,7 @@ class Protocol implements Runnable{
             sc.send(ByteBuffer.wrap(serializeObject(m)), messageInfo);
 
             // Wait for echo from server
-            byte[] data = new byte[512];
+            byte[] data = new byte[256];
             ByteBuffer buf = ByteBuffer.wrap(data);
 
             sc.receive(buf, null, null);
@@ -424,7 +428,7 @@ class Protocol implements Runnable{
                             requestQueue.add(m);
 
                             // Message comparator
-                            if(granted && (messageComparator.compare(grantedMessage, m) == 1)) {
+                            if(grantArray[q_i] && (messageComparator.compare(grantedMessage, m) == 1)) {
                                 sendMessage(MessageType.FAILED, m.origin);
                             }
                         } catch (Exception e) {
@@ -442,13 +446,14 @@ class Protocol implements Runnable{
                         completeArray[m.origin] = true;
                     break;
                     case RELEASE:
-                        granted = false;
+                        grantArray[q_i] = false;
+
                         // Remove request from our requestQueue
-                        // TODO: Remoe request with the smallest timestamp
                         Message[] requests = new Message[requestQueue.size()];
                         requestQueue.toArray(requests);
                         for(int i = 0; i < requests.length; i++) {
                             if(requests[i].origin == m.origin) {
+                                // System.out.println("Request removed");
                                 requestQueue.remove(requests[i]);
                             }
                         }
@@ -471,7 +476,7 @@ class Protocol implements Runnable{
                         if((requestQueue.peek() != null)) {
                             // Grant the request
                             Message mes = requestQueue.remove();
-                            granted = true;
+                            grantArray[q_i] = true;
                             grantedMessage.clock = mes.clock;
                             grantedMessage.origin = mes.origin;
                             sendMessage(MessageType.GRANT, m.origin);
@@ -487,15 +492,17 @@ class Protocol implements Runnable{
             // Process any request messages
             if((requestQueue.peek() != null)) {
 
-                if(granted && !inquired && (messageComparator.compare(requestQueue.peek(),grantedMessage) == 1)) {
+                if(grantArray[q_i] && !inquired && (messageComparator.compare(requestQueue.peek(),grantedMessage) == 1)) {
                     // Need to inquire our grant
                     inquired = true;
                     sendMessage(MessageType.INQUIRE, grantedMessage.origin);
 
-                } else if(!granted) {
+                    // TODO: Do we need to cancel the inquire once we recieve a FAILED message
+
+                } else if(!grantArray[q_i]) {
                     // Grant the request
                     Message m = requestQueue.remove();
-                    granted = true;
+                    grantArray[q_i] = true;
                     grantedMessage.clock = m.clock;
                     grantedMessage.origin = m.origin;
                     sendMessage(MessageType.GRANT, m.origin);
@@ -511,7 +518,6 @@ class Protocol implements Runnable{
                 }
             }
             if(allGranted) {
-                granted = true;
                 csGrant = 1;
                 csRequest = 0;
             }
