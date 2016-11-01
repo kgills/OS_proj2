@@ -15,7 +15,7 @@ import com.sun.nio.sctp.MessageInfo;
 import com.sun.nio.sctp.SctpChannel;
 import com.sun.nio.sctp.SctpServerChannel;
 
-
+// For Circular Wait
 /******************************************************************************/
 class Application implements Runnable {
 
@@ -164,9 +164,8 @@ class ServerThread implements Runnable {
 	}
 	@Override
 	public void run() {
-		// TODO Auto-generated method stub
 		try{
-			ByteBuffer dst = ByteBuffer.allocate(64000);
+			ByteBuffer dst = ByteBuffer.allocate(512);
 			sctpChannel.receive(dst , null, null); 
 			byte[] message = dst.array();
 			ByteArrayInputStream b = new ByteArrayInputStream(message);
@@ -204,7 +203,6 @@ class Protocol implements Runnable{
 	// Execute Maekawa's protocol
 
 	// Class variables
-	//TODO Added ID, HashMap
 	private int n;
 	private int ID;
 	private int clock;
@@ -218,18 +216,8 @@ class Protocol implements Runnable{
 	private String[] ports;
 	private boolean[] completeArray;
 
-	//hostnames[quoruMembers[0]];
-
-	//private HashMap<Integer, >
-
-	// Volatile flags set and cleared by the Protocol and Application
-	private volatile int csRequest;
 	private volatile int csGrant;
-	private volatile int appComplete;
 
-
-	// Queue used for storing messages sent from the Server to the protocol
-	// TODO Shouldn't this be thread safe?
 	private volatile ConcurrentLinkedQueue<Message> rcvQueue;
 
 	Protocol(int n, int n_i, String[] hostnames, String[] ports, int[] quorumMembers) {
@@ -241,13 +229,10 @@ class Protocol implements Runnable{
 		clock = 0;
 		grantCount = 0;
 		iter = -1;
-		csRequest = 0;
 		csGrant = 0;
-		appComplete = 0;
 		keyGranted = 0;
 		ownRequestReceived=false;
 		totalCompleted = 0;
-		//TODO Change the length of these arrays
 		this.quorumMembers= quorumMembers;
 		Arrays.sort(quorumMembers);
 		this.hostnames = hostnames;
@@ -277,18 +262,12 @@ class Protocol implements Runnable{
 	public void enterCS() {
 		setGrantCount();
 		iter = -1;
-		csRequest = 1;
 		Message m = new Message(ID, clock, MessageType.REQUEST);
-		/*if(ID==2 || ID==1)
-			System.out.println("Request added to queue for ID:"+ID+"***************************************************");*/
 		rcvQueue.add(m);
-		//System.out.println("PID:"+Thread.currentThread().getId()+"csRequest "+csRequest);
-		//System.out.println("ID:"+ID+"csGrant"+csGrant);
 		while(csGrant == 0) {}
 	}
 
 	public void leaveCS() {
-		csRequest = 0;
 		csGrant = 0;
 
 		clock++;
@@ -303,8 +282,6 @@ class Protocol implements Runnable{
 	}
 
 	public void appComplete() {
-		//appComplete = 1;
-		//totalCompleted++;
 		completeArray[ID] = true;
 		clock++;
 		Message complete = new Message(ID, clock, MessageType.COMPLETE);
@@ -372,29 +349,26 @@ class Protocol implements Runnable{
 		while(totalCompleted < n) {
 
 			Message m = rcvQueue.peek();
+			
+			//Process the message from the Queue
 			if((m!=null && m.type == MessageType.REQUEST) || (ownRequestReceived && iter < grantCount)) {
 				
+				//Check if the node itself has generated the request
 				if((m!=null && m.sender == ID) || (ownRequestReceived && iter < grantCount)) {
 					
-					/*if(m!=null && m.sender == ID &&ID==2)
-						System.out.println("Processing own REQUEST from ID:"+ID+"***************************************************");*/
 					if(!ownRequestReceived) {
 						rcvQueue.poll();
 						ownRequestReceived = true;
 					}
 					
+					//Proceed to next quorum member if GRANT received from previous one.
 					if(iter < grantCount && grantCount < quorumMembers.length) {
-						//iter++;
 						clock++;
-						/*if(ID==2) {
-							System.out.println("iter < grandCount and so inside this loop+++++++++++++++++++++++++++++++++++++++++++++");
-							System.out.println("quorumMember:"+quorumMembers[iter+1]+" iter:"+(iter++)+" keyGranted"+keyGranted);
-						}*/
+						
 						if(quorumMembers[iter+1]==ID && keyGranted==0) {
 							iter++;
 							keyGranted = 1;
-							/*if(ID==2)
-								System.out.println("Sending GRANT to own request from ID:"+ID+"--------------------------------------------");*/
+							
 							Message grant= new Message(ID, clock, MessageType.GRANT);
 							sendMessage(grant, quorumMembers[iter]);
 						}
@@ -486,7 +460,7 @@ public class Maekawa {
 		Thread server_thread = new Thread(new Server(prot));
 		server_thread.start();
 
-		// Wait 5 secodns for the applications to start
+		// Wait 5 seconds for the applications to start
 		try {
 			Thread.sleep(5000);
 		} catch(Exception e) {
