@@ -6,7 +6,7 @@ print 'Opening config file:', str(sys.argv[1])
 config_file = open(sys.argv[1], 'r')
 
 # Edit this to the path where the executables are
-path="/home/kgills/Workspace/AdvancedOS/OS_proj2/"
+path="/home/kgills/Workspace/OS_proj2/"
 
 # Edit this for your username
 user="khg140030"
@@ -92,7 +92,7 @@ for machine in machines:
 	# command = " ".join(command)
 	i = i+1
 
-	# print command
+	print " ".join(command)
 	p=subprocess.Popen(command)
 
 p.wait()

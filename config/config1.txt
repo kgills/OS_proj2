@@ -1,16 +1,8 @@
-6 100 100 100
+2 100 100 10
 0 localhost 3333
 1 localhost 3334
-2 localhost 3335
-3 localhost 3336
-4 localhost 3337
-5 localhost 3338
-0 0 1 2 4 5
-1 0 1 2 4 5
-2 0 1 2 4 5
-3 0 1 2 4 5
-4 0 1 2 4 5
-5 0 1 2 4 5
+0 0 1
+1 0 1
 
 # ~/Workspace/AdvancedOS/OS_proj2/java Maekawa 2 0 1000 1000 10 localhost 3333 localhost 3334 2 0 1
 # ~/Workspace/AdvancedOS/OS_proj2/java Maekawa 2 1 1000 1000 10 localhost 3333 localhost 3334 2 0 1

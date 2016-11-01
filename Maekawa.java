@@ -27,6 +27,7 @@ class Application implements Runnable {
 
 
     Application(int d, int c, int iter, Protocol p, int n_i) {
+        System.out.println("Application init");
         this.d = d;
         this.c = c;
         this.iter = iter;
@@ -105,13 +106,48 @@ class Message implements java.io.Serializable{
     MessageType type;
 }
 
+class ServerHandler implements Runnable{
+
+    Protocol p;
+    SctpChannel sc;
+
+    ServerHandler(Protocol p, SctpChannel sc) {
+        this.p = p;
+        this.sc = sc;
+    }
+
+    public void run() {
+        try {
+            // Listen for messages from other nodes, pass them to the Maekawa class
+            byte[] data = new byte[512];
+            ByteBuffer buf = ByteBuffer.wrap(data);
+
+            sc.receive(buf, null, null);
+
+            ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
+            ObjectInputStream ois = new ObjectInputStream(bytesIn);
+            Message m = (Message)ois.readObject();
+            ois.close();
+
+            // Echo back data to ensure FIFO
+            MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
+            sc.send(buf, messageInfo);
+
+            sc.close();
+
+            p.putQueue(m);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
 /******************************************************************************/
 class Server implements Runnable{
 
     private Protocol p;
     private int port;
-    SctpServerChannel ssc;
-    SctpChannel sc;
+    private SctpServerChannel ssc;
+    private SctpChannel sc;
     private volatile Boolean closeFlag;
 
     Server(Protocol p, int port) {
@@ -163,34 +199,10 @@ class Server implements Runnable{
                     return;
                 }
 
-                Thread clientThread = new Thread() {
-                    public void run() {
-                        try {
-                            // Listen for messages from other nodes, pass them to the Maekawa class
-                            byte[] data = new byte[512];
-                            ByteBuffer buf = ByteBuffer.wrap(data);
-
-                            sc.receive(buf, null, null);
-
-                            ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
-                            ObjectInputStream ois = new ObjectInputStream(bytesIn);
-                            Message m = (Message)ois.readObject();
-                            ois.close();
-
-                            // Echo back data to ensure FIFO
-                            MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
-                            sc.send(buf, messageInfo);
-
-                            sc.close();
-
-                            p.putQueue(m);
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    }
-
-                };
-                clientThread.start();
+                // Start a ServerHandler thread
+                ServerHandler serverHandler = new ServerHandler(p, sc);
+                Thread serverHandler_thread = new Thread(serverHandler);
+                serverHandler_thread.start();
 
             
             } catch (Exception e) {
@@ -266,6 +278,7 @@ class Protocol implements Runnable{
         clock = 0;
         granted = false;
         inquired = false;
+        grantedMessage = new Message();
         grantedMessage.clock = 0;
         grantedMessage.origin = 0;
 
@@ -313,7 +326,7 @@ class Protocol implements Runnable{
     }
 
     public void putQueue(Message m) {
-        try {
+        try {;
             receiveQueue.add(m);
         } catch (Exception e) {
             e.printStackTrace();
@@ -361,6 +374,9 @@ class Protocol implements Runnable{
 
     private void broadcastMessage(MessageType type) {
         for(int i = 0; i < quorumSize; i++) {
+            // if(quorumMembers[i] == n_i) {
+            //     continue;
+            // }
             sendMessage(type, quorumMembers[i]);
         }
     }
@@ -382,6 +398,8 @@ class Protocol implements Runnable{
                         m_q = i;
                     }
                 }
+
+                System.out.println(n_i+" Parsing "+m.type+" from "+m.origin);
 
                 clock++;
                 if(m.clock > clock) {
@@ -572,7 +590,7 @@ public class Maekawa {
 
         // Wait 5 secodns for the applications to start
         try {
-            Thread.sleep(5000);
+            Thread.sleep(1000);
         } catch(Exception e) {
             e.printStackTrace();
         }
