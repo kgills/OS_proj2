@@ -39,7 +39,7 @@ class Application implements Runnable {
 
     private void delay(double usec) {
         long start = System.nanoTime();
-        long stop = start + (long)usec*1000;
+        long stop = start + (long)usec*10;
 
         while(System.nanoTime() < stop) {}
     }
@@ -117,7 +117,7 @@ class ServerHandler implements Runnable{
     public void run() {
         try {
             // Listen for messages from other nodes, pass them to the Maekawa class
-            byte[] data = new byte[512];
+            byte[] data = new byte[256];
             ByteBuffer buf = ByteBuffer.wrap(data);
 
             sc.receive(buf, null, null);
@@ -323,7 +323,7 @@ class Protocol implements Runnable{
             sc.send(ByteBuffer.wrap(serializeObject(m)), messageInfo);
 
             // Wait for echo from server
-            byte[] data = new byte[512];
+            byte[] data = new byte[256];
             ByteBuffer buf = ByteBuffer.wrap(data);
 
             sc.receive(buf, null, null);
