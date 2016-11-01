@@ -1,13 +1,12 @@
 #!/usr/bin/python
 
 import sys, subprocess
-
 print 'Opening config file:', str(sys.argv[1])
 config_file = open(sys.argv[1], 'r')
 
 # Edit this to the path where the executables are
 # path="/home/kgills/Workspace/AdvancedOS/OS_proj2/"
-path="/home/012/k/kh/khg140030/Workspace/OS_proj2"
+path="/home/012/k/kh/khg140030/"
 
 # Edit this for your username
 user="khg140030"
@@ -79,23 +78,9 @@ for quorum in quorums:
 
 # Build and execute the commands
 # print machines
-i = 0
+
 for machine in machines:
-
-	command = ["java","-cp",path,"Maekawa",str(n),machines[i][0], str(d), str(c), str(iters)]
-
-	for machine2 in machines:
-		command = command + machine2[1:]
-
-	command = command +[str(len(quorums[i]) - 1)]+quorums[i][1:]
-
-	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1]]+command
-	# command = " ".join(command)
-	i = i+1
-
-	# print command
+	command = ["ssh","-o","StrictHostKeyChecking=no",user+"@"+machine[1],"killall","-u",user,"&"]
 	print " ".join(command)
-	p=subprocess.Popen(command)
-
-p.wait()
-
+	p = subprocess.Popen(command)
+	p.wait()
