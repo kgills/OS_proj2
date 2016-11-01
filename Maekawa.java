@@ -1,6 +1,7 @@
 import static java.lang.Math.*;
 import java.util.Comparator;
 import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.PriorityQueue;
 import java.util.Arrays;
 import java.io.*;
@@ -60,6 +61,7 @@ class Application implements Runnable {
             delay(nextExp(d));
 
             p.enterCS();
+            System.out.println(n_i+" In CS");
 
             try {
                 FileWriter writer = new FileWriter("Maekawa.txt", true);
@@ -80,6 +82,8 @@ class Application implements Runnable {
                 e.printStackTrace();
             }
 
+
+            System.out.println(n_i+" Out CS");
 
             p.leaveCS();
 
@@ -106,6 +110,7 @@ class Message implements java.io.Serializable{
     MessageType type;
 }
 
+/******************************************************************************/
 class ServerHandler implements Runnable{
 
     Protocol p;
@@ -287,7 +292,7 @@ class Protocol implements Runnable{
         appComplete = 0;
         everyNodeComplete = false;
 
-        receiveQueue = new PriorityQueue<Message>(n, messageComparator);  // Server produces messages, protocol consumes
+        receiveQueue = new LinkedBlockingQueue<Message>();  // Server produces messages, protocol consumes
         requestQueue = new PriorityQueue<Message>(n, messageComparator);  // que the received messages
         completeArray = new Boolean[n];
         for(int i = 0; i < n; i++) {
@@ -325,7 +330,7 @@ class Protocol implements Runnable{
         appComplete = 1;
     }
 
-    public void putQueue(Message m) {
+    public synchronized void putQueue(Message m) {
         try {;
             receiveQueue.add(m);
         } catch (Exception e) {
@@ -349,10 +354,12 @@ class Protocol implements Runnable{
         Message m = new Message();
         m.type = type;
         m.origin = n_i;
-        m.clock = clock;
-        clock++;
+        m.clock = clock++;
 
         try {
+
+            System.out.println(n_i+" TX "+m.type+" to "+dest+" "+m.clock);
+
             // Send message to dest
             InetSocketAddress serverAddr = new InetSocketAddress(hosts[dest], ports[dest]);
             SctpChannel sc = SctpChannel.open(serverAddr, 0, 0);
@@ -374,10 +381,15 @@ class Protocol implements Runnable{
 
     private void broadcastMessage(MessageType type) {
         for(int i = 0; i < quorumSize; i++) {
-            // if(quorumMembers[i] == n_i) {
-            //     continue;
-            // }
-            sendMessage(type, quorumMembers[i]);
+            if(quorumMembers[i] == n_i) {
+                Message m = new Message();
+                m.type = type;
+                m.clock = clock++;
+                m.origin = n_i;
+                requestQueue.add(m);
+            } else {
+                sendMessage(type, quorumMembers[i]);
+            }
         }
     }
 
@@ -399,7 +411,7 @@ class Protocol implements Runnable{
                     }
                 }
 
-                System.out.println(n_i+" Parsing "+m.type+" from "+m.origin);
+                System.out.println(n_i+" RX "+m.type+" from "+m.origin+" "+m.clock);
 
                 clock++;
                 if(m.clock > clock) {
@@ -498,7 +510,7 @@ class Protocol implements Runnable{
                     break;
                 }
             }
-            if(allGranted && !granted) {
+            if(allGranted) {
                 granted = true;
                 csGrant = 1;
                 csRequest = 0;
@@ -590,7 +602,7 @@ public class Maekawa {
 
         // Wait 5 secodns for the applications to start
         try {
-            Thread.sleep(1000);
+            Thread.sleep(3000);
         } catch(Exception e) {
             e.printStackTrace();
         }
