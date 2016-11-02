@@ -236,6 +236,7 @@ class Protocol implements Runnable{
     // Variables for running the protocol
     private int clock;
     private Message grantedMessage;
+    private Message inquiryMessage;
 
     // Volatile flags set and cleared by the Protocol and Application
     private volatile int csRequest;
@@ -291,8 +292,11 @@ class Protocol implements Runnable{
         // Initialize class variables
         clock = 0;
         grantedMessage = new Message();
+        inquiryMessage = new Message();
         grantedMessage.clock = 0;
         grantedMessage.origin = 0;
+        inquiryMessage.clock = 0;
+        inquiryMessage.origin = 0;
 
         csRequest = 0;
         csGrant = 0;
@@ -451,6 +455,7 @@ class Protocol implements Runnable{
                             } else if(granted && !inquired && (messageComparator.compare(m,grantedMessage) == -1)) {
 
                                 inquired = true;
+                                inquiryMessage = m;
                                 sendMessage(MessageType.INQUIRE, grantedMessage.origin, true);
 
                             } else if(!granted) {
@@ -460,6 +465,10 @@ class Protocol implements Runnable{
                                 grantedMessage.clock = m.clock;
                                 grantedMessage.origin = m.origin;
                                 sendMessage(MessageType.GRANT, m.origin, true);
+
+                            } else if(granted && inquired && messageComparator.compare(m,inquiryMessage) == -1) {
+                                sendMessage(MessageType.FAILED, inquiryMessage.origin, true);
+                                inquiryMessage = m;
                             }
 
                         } catch (Exception e) {
@@ -476,7 +485,8 @@ class Protocol implements Runnable{
                         failArray[m_q] = true;
                         for(int i = 0; i < n; i++) {
                             if(inquireArray[i] == true) {
-                                // grantArray[m_q] = false;
+
+                                grantArray[m_q] = false;
                                 inquireArray[i] = false;
                                 sendMessage(MessageType.YIELD, i, true);
                             }
@@ -518,8 +528,8 @@ class Protocol implements Runnable{
                         inquireArray[m.origin] = true;
                         for(int i = 0; i < quorumSize; i++) {
                             if(failArray[i] == true) {
-                                grantArray[m.origin] = false;
-                                // granted = true;
+                                grantArray[m_q] = false;
+                                inquireArray[m.origin] = false;
                                 sendMessage(MessageType.YIELD, m.origin, true);
                                 break;
                             }
@@ -531,6 +541,7 @@ class Protocol implements Runnable{
                         inquireArray[m.origin] = false;
                         // Need to grant to request we inquired about
                         Message peeked = requestQueue.peek();
+                        // if(peeked != null && !granted) {
                         if(peeked != null) {
                             // Grant the request
                             granted = true;
@@ -538,9 +549,10 @@ class Protocol implements Runnable{
                             grantedMessage.clock = peeked.clock;
                             grantedMessage.origin = peeked.origin;
                             sendMessage(MessageType.GRANT, peeked.origin, true);
-                        } else {
-                            System.out.println("Error, Received yelid without any request");
                         }
+                        // } else {
+                        //     System.out.println("Error, Received yelid without any request");
+                        // }
 
                     break;
                     default:
