@@ -4,6 +4,7 @@ import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.PriorityQueue;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -43,7 +44,7 @@ class Application implements Runnable {
 
     private void delay(double usec) {
         long start = System.nanoTime();
-        long stop = start + (long)usec*10;
+        long stop = start + (long)usec*1000;
 
         while(System.nanoTime() < stop) {}
     }
@@ -133,6 +134,8 @@ class ServerHandler implements Runnable{
             ObjectInputStream ois = new ObjectInputStream(bytesIn);
             Message m = (Message)ois.readObject();
             ois.close();
+
+            System.out.println("RX "+m.type+" from "+m.origin+" "+m.clock);
 
             // Echo back data to ensure FIFO
             MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
@@ -225,7 +228,6 @@ class Protocol implements Runnable{
     // Class variables
     private int n;
     private int n_i;
-    private int q_i;
     private int quorumSize;
     private int[] quorumMembers;
     private String[] hosts;
@@ -233,7 +235,6 @@ class Protocol implements Runnable{
 
     // Variables for running the protocol
     private int clock;
-    private Boolean inquired;
     private Message grantedMessage;
 
     // Volatile flags set and cleared by the Protocol and Application
@@ -247,11 +248,19 @@ class Protocol implements Runnable{
     private Queue<Message> requestQueue;
     private Boolean[] completeArray;
     private Boolean[] grantArray;
+    private Boolean granted;
     private Boolean[] failArray;
+    private Boolean[] inquireArray;
+    private Boolean inquired;
+
+
+
+
+    private int loopcount;
 
     public static Comparator<Message> messageComparator = new Comparator<Message>() {
         @Override
-        public int compare(Message m1, Message m2) {
+        public int compare(Message m2, Message m1) {
             if(m1.clock < m2.clock) {
                 return 1;
             } 
@@ -281,7 +290,6 @@ class Protocol implements Runnable{
 
         // Initialize class variables
         clock = 0;
-        inquired = false;
         grantedMessage = new Message();
         grantedMessage.clock = 0;
         grantedMessage.origin = 0;
@@ -301,33 +309,37 @@ class Protocol implements Runnable{
         for(int i = 0; i < quorumSize; i++) {
             grantArray[i] = false;
         }
+        granted = false;
+
         failArray = new Boolean[quorumSize];
         for(int i = 0; i < quorumSize; i++) {
             failArray[i] = false;
         }
-
-        for(int i = 0; i < quorumSize; i++) {
-            if(q_i == quorumMembers[i]) {
-                q_i = i;
-            }
+        inquireArray = new Boolean[n];
+        for(int i = 0; i < n; i++) {
+            inquireArray[i] = false;
         }
+        inquired = false;
+
+
+        loopcount = 0;
     }
 
     // Class methods
     public void enterCS() {
+        csRequest = 1;
         broadcastMessage(MessageType.REQUEST);
         while(csGrant == 0) {}
     }
 
     public void leaveCS() {
-        csGrant = 0;
 
-        for(int i = 0; i < quorumSize; i++) {
-            if(quorumMembers[i] != n_i) {
-                grantArray[i] = false;
-                sendMessage(MessageType.RELEASE, quorumMembers[i]);
-            }
+        csGrant = 0;
+        for(int i = 0; i < grantArray.length; i++) {
+            grantArray[i] = false;
         }
+        broadcastMessage(MessageType.RELEASE);
+
     }
 
     public void appComplete() {
@@ -385,15 +397,7 @@ class Protocol implements Runnable{
 
     private void broadcastMessage(MessageType type) {
         for(int i = 0; i < quorumSize; i++) {
-            if(quorumMembers[i] == n_i) {
-                Message m = new Message();
-                m.type = type;
-                m.clock = clock++;
-                m.origin = n_i;
-                requestQueue.add(m);
-            } else {
-                sendMessage(type, quorumMembers[i]);
-            }
+            sendMessage(type, quorumMembers[i]);
         }
     }
 
@@ -408,14 +412,13 @@ class Protocol implements Runnable{
                 Message m = receiveQueue.remove();
 
                 // Convert m.origin to the index into our quorum members
-                int m_q = 0;
+                int m_q = -1;
                 for(int i = 0; i < quorumSize; i++) {
                     if(m.origin == quorumMembers[i]) {
                         m_q = i;
                     }
                 }
 
-                System.out.println(n_i+" RX "+m.type+" from "+m.origin+" "+m.clock);
 
                 clock++;
                 if(m.clock > clock) {
@@ -428,7 +431,10 @@ class Protocol implements Runnable{
                             requestQueue.add(m);
 
                             // Message comparator
-                            if(grantArray[q_i] && (messageComparator.compare(grantedMessage, m) == 1)) {
+                            if(granted && (messageComparator.compare(grantedMessage, m) == -1)) {
+                                System.out.println("Transmitting failed");
+                                System.out.println(m.origin+" "+grantedMessage.origin);
+                                System.out.println(m.clock+" "+grantedMessage.clock);
                                 sendMessage(MessageType.FAILED, m.origin);
                             }
                         } catch (Exception e) {
@@ -441,20 +447,26 @@ class Protocol implements Runnable{
                     break;
                     case FAILED:
                         failArray[m_q] = true;
+                        for(int i = 0; i < n; i++) {
+                            if(inquireArray[i] == true) {
+                                // grantArray[m_q] = false;
+                                sendMessage(MessageType.YIELD, i);
+                            }
+                        }
                     break;
                     case COMPLETE:
                         completeArray[m.origin] = true;
                     break;
                     case RELEASE:
-                        grantArray[q_i] = false;
+                        granted = false;
 
-                        // Remove request from our requestQueue
-                        Message[] requests = new Message[requestQueue.size()];
-                        requestQueue.toArray(requests);
-                        for(int i = 0; i < requests.length; i++) {
-                            if(requests[i].origin == m.origin) {
-                                // System.out.println("Request removed");
-                                requestQueue.remove(requests[i]);
+                        Iterator queIterator = requestQueue.iterator();
+
+                        while(queIterator.hasNext()) {
+                            Message queM = (Message)queIterator.next();
+                            if(queM.origin == m.origin) {
+                                requestQueue.remove(queM);
+                                break;
                             }
                         }
 
@@ -462,9 +474,11 @@ class Protocol implements Runnable{
                     case INQUIRE:
                         // Yield lock if received a failed message
                         // TODO: Need some more logic here
+                        inquireArray[m.origin] = true;
                         for(int i = 0; i < quorumSize; i++) {
                             if(failArray[i] == true) {
-                                grantArray[m_q] = false;
+                                // grantArray[m.origin] = false;
+                                // granted = true;
                                 sendMessage(MessageType.YIELD, m.origin);
                             }
                         }
@@ -475,11 +489,13 @@ class Protocol implements Runnable{
                         // Need to grant to request we inquired about
                         if((requestQueue.peek() != null)) {
                             // Grant the request
-                            Message mes = requestQueue.remove();
-                            grantArray[q_i] = true;
+                            Message mes = requestQueue.peek();
+                            granted = true;
                             grantedMessage.clock = mes.clock;
                             grantedMessage.origin = mes.origin;
-                            sendMessage(MessageType.GRANT, m.origin);
+                            sendMessage(MessageType.GRANT, mes.origin);
+                        } else {
+                            System.out.println("Error, Received yelid without any request");
                         }
 
                     break;
@@ -490,37 +506,64 @@ class Protocol implements Runnable{
             }
 
             // Process any request messages
-            if((requestQueue.peek() != null)) {
+            Message peeked = requestQueue.peek();
+            if((peeked != null)) {
 
-                if(grantArray[q_i] && !inquired && (messageComparator.compare(requestQueue.peek(),grantedMessage) == 1)) {
+                if(granted && !inquired && (messageComparator.compare(peeked,grantedMessage) == -1)) {
                     // Need to inquire our grant
+
+                    System.out.println(peeked.origin+" "+grantedMessage.origin);
+                    System.out.println(peeked.clock+" "+grantedMessage.clock);
+
                     inquired = true;
                     sendMessage(MessageType.INQUIRE, grantedMessage.origin);
 
+                    System.out.println("*******************************************************");
+
                     // TODO: Do we need to cancel the inquire once we recieve a FAILED message
 
-                } else if(!grantArray[q_i]) {
+                } else if(!granted) {
                     // Grant the request
-                    Message m = requestQueue.remove();
-                    grantArray[q_i] = true;
-                    grantedMessage.clock = m.clock;
-                    grantedMessage.origin = m.origin;
-                    sendMessage(MessageType.GRANT, m.origin);
+                    granted = true;
+                    grantedMessage.clock = peeked.clock;
+                    grantedMessage.origin = peeked.origin;
+                    sendMessage(MessageType.GRANT, peeked.origin);
+                } else {
+                    loopcount++;
+                }
+
+                if(loopcount == 1000000000) {
+                    loopcount = 0;
+                    System.out.println("Peeked "+peeked.clock+" "+peeked.origin);
+                    System.out.println("grantedMessage "+grantedMessage.clock+" "+grantedMessage.origin);
+                    System.out.println("granted "+granted);
+                    System.out.println("inquired "+inquired);
+                    System.out.println("comparator "+messageComparator.compare(peeked,grantedMessage));
+
+                    Iterator queIterator = requestQueue.iterator();
+
+                    while(queIterator.hasNext()) {
+                        Message queM = (Message)queIterator.next();
+                        System.out.println("queM "+queM.clock+" "+queM.origin);
+                    }
                 }
             }
 
             // Check to see if we've received all the grant messags
-            Boolean allGranted = true;
-            for(int i = 0; i < quorumSize; i++) {
-                if(grantArray[i] == false) {
-                    allGranted = false;
-                    break;
+            if(csRequest == 1) {
+                Boolean allGranted = true;
+                for(int i = 0; i < quorumSize; i++) {
+                    if(grantArray[i] == false) {
+                        allGranted = false;
+                        break;
+                    }
+                }
+                if(allGranted) {
+                    csGrant = 1;
+                    csRequest = 0;
                 }
             }
-            if(allGranted) {
-                csGrant = 1;
-                csRequest = 0;
-            }
+
 
             // Check for app completion
             if(appComplete == 1) {
