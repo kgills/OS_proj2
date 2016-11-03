@@ -44,7 +44,7 @@ class Application implements Runnable {
 
     private void delay(double usec) {
         long start = System.nanoTime();
-        long stop = start + (long)usec*1000;
+        long stop = start + (long)usec*10;
 
         while(System.nanoTime() < stop) {}
     }
@@ -62,11 +62,11 @@ class Application implements Runnable {
             delay(nextExp(d));
 
             p.enterCS();
-            System.out.println(n_i+" In CS");
+            // System.out.println(n_i+" In CS");
 
             try {
                 FileWriter writer = new FileWriter("Maekawa.txt", true);
-                writer.write("Enter CS "+n_i+"\n");
+                writer.write("E "+n_i+"\n");
                 writer.close();
             } catch (Exception e) {
                 e.printStackTrace();
@@ -77,14 +77,14 @@ class Application implements Runnable {
 
             try {
                 FileWriter writer = new FileWriter("Maekawa.txt", true);
-                writer.write("Exit CS "+n_i+"\n");
+                writer.write("L "+n_i+"\n");
                 writer.close();
             } catch(Exception e) {
                 e.printStackTrace();
             }
 
 
-            System.out.println(n_i+" Out CS");
+            // System.out.println(n_i+" Out CS");
 
             p.leaveCS();
 
@@ -135,7 +135,7 @@ class ServerHandler implements Runnable{
             Message m = (Message)ois.readObject();
             ois.close();
 
-            System.out.println(p.n_i+" RX "+m.type+" from "+m.origin+" "+m.clock);
+            // System.out.println(p.n_i+" RX "+m.type+" from "+m.origin+" "+m.clock);
 
             // Echo back data to ensure FIFO
             MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
@@ -232,15 +232,20 @@ class Protocol implements Runnable{
     private int[] quorumMembers;
     private String[] hosts;
     private int[] ports;
+    private Iterator queIterator;
+    private Message queM;
+    
 
     // Variables for running the protocol
-    private int clock;
+    private volatile int clock;
     private Message grantedMessage;
     private Message inquiryMessage;
 
     // Volatile flags set and cleared by the Protocol and Application
     private volatile int csRequest;
+    private volatile int csRequested;
     private volatile int csGrant;
+    private volatile int csReleased;
     private volatile int appComplete;
     private volatile Boolean everyNodeComplete;
 
@@ -254,6 +259,7 @@ class Protocol implements Runnable{
     private Boolean[] inquireArray;
     private Boolean inquired;
 
+    private volatile int messagelock;
 
 
 
@@ -301,6 +307,8 @@ class Protocol implements Runnable{
         csRequest = 0;
         csGrant = 0;
         appComplete = 0;
+        csReleased = 0;
+        csRequested = 0;
         everyNodeComplete = false;
 
         receiveQueue = new LinkedBlockingQueue<Message>();  // Server produces messages, protocol consumes
@@ -326,31 +334,30 @@ class Protocol implements Runnable{
         inquired = false;
 
 
+        messagelock = 0;
         loopcount = 0;
     }
 
     // Class methods
     public void enterCS() {
         csRequest = 1;
+        csRequested = 1;
+
         broadcastMessage(MessageType.REQUEST);
+
         while(csGrant == 0) {}
     }
 
     public void leaveCS() {
 
-        csGrant = 0;
         for(int i = 0; i < grantArray.length; i++) {
             grantArray[i] = false;
-        }
-        for(int i = 0; i < failArray.length; i++) {
-            failArray[i] = false;
-        }
-        for(int i = 0; i < inquireArray.length; i++) {
-            inquireArray[i] = false;
         }
         inquired = false;
         broadcastMessage(MessageType.RELEASE);
 
+        csGrant = 0;
+        csReleased = 1;
     }
 
     public void appComplete() {
@@ -377,17 +384,18 @@ class Protocol implements Runnable{
     }
 
     // Send message to destination node
-    private void sendMessage(MessageType type, int dest, Boolean inc) {
+    private synchronized void sendMessage(MessageType type, int dest){
+
+        while(messagelock == 1) {}
+
         Message m = new Message();
         m.type = type;
         m.origin = n_i;
-        if(inc) {
-            m.clock = clock++;            
-        }
+        m.clock = clock++;            
 
         try {
 
-            System.out.println(n_i+" TX "+m.type+" to "+dest+" "+m.clock);
+            // System.out.println(n_i+" TX "+m.type+" to "+dest+" "+m.clock);
 
             // Send message to dest
             InetSocketAddress serverAddr = new InetSocketAddress(hosts[dest], ports[dest]);
@@ -408,10 +416,39 @@ class Protocol implements Runnable{
         }
     }
 
-    private void broadcastMessage(MessageType type) {
+    private synchronized void broadcastMessage(MessageType type) {
+        messagelock = 1;
+        int broadcast_clock = clock++;
         for(int i = 0; i < quorumSize; i++) {
-            sendMessage(type, quorumMembers[i], false);
+            Message m = new Message();
+            m.type = type;
+            m.origin = n_i;
+            m.clock = broadcast_clock;            
+
+            try {
+
+                // System.out.println(n_i+" TX "+m.type+" to "+dest+" "+m.clock);
+
+                // Send message to dest
+                InetSocketAddress serverAddr = new InetSocketAddress(hosts[quorumMembers[i]], ports[quorumMembers[i]]);
+                SctpChannel sc = SctpChannel.open(serverAddr, 0, 0);
+
+                MessageInfo messageInfo = MessageInfo.createOutgoing(null, 0);
+                sc.send(ByteBuffer.wrap(serializeObject(m)), messageInfo);
+
+                // Wait for echo from server
+                byte[] data = new byte[256];
+                ByteBuffer buf = ByteBuffer.wrap(data);
+
+                sc.receive(buf, null, null);
+
+                sc.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
+
+        messagelock = 0;
     }
 
     public void run() {
@@ -423,11 +460,16 @@ class Protocol implements Runnable{
             loopcount++;
 
             // Process any received messages
-            while(receiveQueue.peek() != null) {
+            if((csGrant == 0) && receiveQueue.peek() != null) {
 
                 loopcount = 0;
 
                 Message m = receiveQueue.remove();
+
+                clock++;
+                if(m.clock > clock) {
+                    clock = m.clock;
+                }
 
                 // Convert m.origin to the index into our quorum members
                 int m_q = -1;
@@ -437,12 +479,6 @@ class Protocol implements Runnable{
                     }
                 }
 
-
-                clock++;
-                if(m.clock > clock) {
-                    clock = m.clock;
-                }
-
                 switch(m.type) {
                     case REQUEST:
                         try {
@@ -450,24 +486,38 @@ class Protocol implements Runnable{
 
                             // Message comparator
                             if(granted && (messageComparator.compare(grantedMessage, m) == -1)) {
-                                sendMessage(MessageType.FAILED, m.origin, true);
+                                sendMessage(MessageType.FAILED, m.origin);
 
                             } else if(granted && !inquired && (messageComparator.compare(m,grantedMessage) == -1)) {
 
                                 inquired = true;
                                 inquiryMessage = m;
-                                sendMessage(MessageType.INQUIRE, grantedMessage.origin, true);
+                                sendMessage(MessageType.INQUIRE, grantedMessage.origin);
 
                             } else if(!granted) {
-                                // Grant the request
-                                granted = true;
-                                inquired = false;
-                                grantedMessage.clock = m.clock;
-                                grantedMessage.origin = m.origin;
-                                sendMessage(MessageType.GRANT, m.origin, true);
+                                // Grant the request at top of the queue
+                                Message peeked0 = requestQueue.peek();
+                                if(peeked0 != null) {
+                                    // Grant the request
+                                    granted = true;
+                                    inquired = false;
+                                    grantedMessage = peeked0;
+                                    sendMessage(MessageType.GRANT, peeked0.origin);
+
+                                    // Send failed message to other requests
+                                    queIterator = requestQueue.iterator();
+
+                                    while(queIterator.hasNext()) {
+                                        queM = (Message)queIterator.next();
+                                        if(queM == peeked0) {
+                                            continue;
+                                        }
+                                        sendMessage(MessageType.FAILED, queM.origin);
+                                    }
+                                }
 
                             } else if(granted && inquired && messageComparator.compare(m,inquiryMessage) == -1) {
-                                sendMessage(MessageType.FAILED, inquiryMessage.origin, true);
+                                sendMessage(MessageType.FAILED, inquiryMessage.origin);
                                 inquiryMessage = m;
                             }
 
@@ -485,10 +535,9 @@ class Protocol implements Runnable{
                         failArray[m_q] = true;
                         for(int i = 0; i < n; i++) {
                             if(inquireArray[i] == true) {
-
-                                grantArray[m_q] = false;
                                 inquireArray[i] = false;
-                                sendMessage(MessageType.YIELD, i, true);
+                                grantArray[m_q] = false;
+                                sendMessage(MessageType.YIELD, i);
                             }
                         }
                     break;
@@ -499,16 +548,7 @@ class Protocol implements Runnable{
                         granted = false;
                         inquired = false;
                         inquireArray[m.origin] = false;
-
-                        Iterator queIterator = requestQueue.iterator();
-
-                        while(queIterator.hasNext()) {
-                            Message queM = (Message)queIterator.next();
-                            if(queM.origin == m.origin) {
-                                requestQueue.remove(queM);
-                                break;
-                            }
-                        }
+                        requestQueue.remove(grantedMessage);
 
                         // Send grant to next request in the queue
                         Message peeked0 = requestQueue.peek();
@@ -516,9 +556,19 @@ class Protocol implements Runnable{
                             // Grant the request
                             granted = true;
                             inquired = false;
-                            grantedMessage.clock = peeked0.clock;
-                            grantedMessage.origin = peeked0.origin;
-                            sendMessage(MessageType.GRANT, peeked0.origin, true);
+                            grantedMessage = peeked0;
+                            sendMessage(MessageType.GRANT, peeked0.origin);
+
+                            // Send failed message to other requests
+                            queIterator = requestQueue.iterator();
+
+                            while(queIterator.hasNext()) {
+                                queM = (Message)queIterator.next();
+                                if(queM == peeked0) {
+                                    continue;
+                                }
+                                sendMessage(MessageType.FAILED, queM.origin);
+                            }
                         }
 
                     break;
@@ -530,7 +580,7 @@ class Protocol implements Runnable{
                             if(failArray[i] == true) {
                                 grantArray[m_q] = false;
                                 inquireArray[m.origin] = false;
-                                sendMessage(MessageType.YIELD, m.origin, true);
+                                sendMessage(MessageType.YIELD, m.origin);
                                 break;
                             }
                         }
@@ -546,93 +596,28 @@ class Protocol implements Runnable{
                             // Grant the request
                             granted = true;
                             inquired = false;
-                            grantedMessage.clock = peeked.clock;
-                            grantedMessage.origin = peeked.origin;
-                            sendMessage(MessageType.GRANT, peeked.origin, true);
+                            grantedMessage = peeked;
+                            sendMessage(MessageType.GRANT, peeked.origin);
+
+                            // Send failed message to other requests
+                            queIterator = requestQueue.iterator();
+
+                            while(queIterator.hasNext()) {
+                                queM = (Message)queIterator.next();
+                                if(queM == peeked) {
+                                    continue;
+                                }
+                                sendMessage(MessageType.FAILED, queM.origin);
+                            }
                         }
-                        // } else {
-                        //     System.out.println("Error, Received yelid without any request");
-                        // }
+   
 
                     break;
                     default:
                     System.out.println("Unknown message received by protocol");
                     return;
                 }
-
-                // Process request queue
             }
-
-            /*
-            // Process any request messages
-            Message peeked = requestQueue.peek();
-            if((peeked != null)) {
-
-                if(granted && !inquired && (messageComparator.compare(peeked,grantedMessage) == -1)) {
-                    // Need to inquire our grant
-
-                    System.out.println(peeked.origin+" "+grantedMessage.origin);
-                    System.out.println(peeked.clock+" "+grantedMessage.clock);
-
-                    inquired = true;
-                    sendMessage(MessageType.INQUIRE, grantedMessage.origin, true);
-
-                    System.out.println("*******************************************************");
-
-                    // TODO: Do we need to cancel the inquire once we recieve a FAILED message
-
-                } else if(!granted) {
-                    // Grant the request
-                    granted = true;
-                    inquired = false;
-                    grantedMessage.clock = peeked.clock;
-                    grantedMessage.origin = peeked.origin;
-                    sendMessage(MessageType.GRANT, peeked.origin, true);
-
-                    // Send failed message to other requests
-                    Iterator queIterator = requestQueue.iterator();
-
-                    while(queIterator.hasNext()) {
-                        Message queM = (Message)queIterator.next();
-                        if(queM == peeked) {
-                            continue;
-                        }
-                        sendMessage(MessageType.FAILED, queM.origin, true);
-                    }
-
-                } else {
-                    loopcount++;
-                }
-
-
-            } else {
-                loopcount++;
-            }
-
-*/
-            if(loopcount == 1000000000) {
-                loopcount = 0;
-                System.out.println(n_i+" grantedMessage "+grantedMessage.clock+" "+grantedMessage.origin);
-                System.out.println(n_i+" granted "+granted);
-                System.out.println(n_i+" inquired "+inquired);
-
-                Iterator queIterator = requestQueue.iterator();
-
-                while(queIterator.hasNext()) {
-                    Message queM = (Message)queIterator.next();
-                    System.out.println("queM "+queM.clock+" "+queM.origin);
-                }
-
-                for(int i = 0; i < quorumSize; i++) {
-                    System.out.println("fail = "+failArray[i]);
-                }
-
-                for(int i = 0; i < quorumSize; i++) {
-                    System.out.println("grant = "+grantArray[i]);
-                }
-            }
-            
-            
 
             // Check to see if we've received all the grant messags
             if(csRequest == 1) {
@@ -657,7 +642,7 @@ class Protocol implements Runnable{
                 // Send complete message to all of the nodes
                 for(int i = 0; i < n; i++) {
                     if(i != n_i) {
-                        sendMessage(MessageType.COMPLETE, i, true);                        
+                        sendMessage(MessageType.COMPLETE, i);
                     }
                 }
                 completeArray[n_i]=true;

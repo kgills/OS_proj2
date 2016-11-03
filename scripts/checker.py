@@ -9,14 +9,14 @@ n_i = "-1"
 for line in output_file:
 	line = line.split(" ")
 
-	if(line[0] == "Enter"):
+	if(line[0] == "E"):
 		if(n_i != "-1"):
 			print("Colision!")
 			output_file.close()
 			exit(0)
-		n_i = line[2][0]
-	elif(line[0] == "Exit"):
-		if(n_i != line[2][0]):
+		n_i = line[1][0]
+	elif(line[0] == "L"):
+		if(n_i != line[1][0]):
 			print("Colision!")
 			output_file.close()
 			exit(0)

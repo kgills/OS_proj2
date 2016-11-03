@@ -1,4 +1,4 @@
-5 20000 10000 10
+5 20 10 100
 0 localhost 1274
 1 localhost 1285
 2 localhost 1296
